@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>離島社署個案登記表</title>
+<!-- SheetJS (xlsx) 從 CDN 載入，僅供【匯出】Excel 使用 -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root{
+    --green:#16a34a; --blue:#2563eb; --orange:#ea580c;
+    --red:#dc2626; --purple:#7c3aed; --grey:#6b7280;
+}
+*{box-sizing:border-box;}
+body{
+    font-family:"Microsoft YaHei","PingFang TC","Heiti TC",sans-serif;
+    margin:0; padding:16px; background:#f3f4f6; color:#1f2937; font-size:15px;
+}
+.main-wrap{
+    display:grid;
+    grid-template-areas:
+        "top"
+        "left";
+    grid-template-rows: auto 1fr;
+    gap:14px;
+    max-width:1200px; margin:0 auto;
+}
+.card{background:#fff;border:1px solid #aaa;padding:12px;border-radius:6px;overflow:auto;min-height:0;}
+.card-top{grid-area:top;}
+.card-left{grid-area:left;min-width:0;}
+.title-bar{font-weight:bold;font-size:16px;padding:6px 0 10px;border-bottom:2px solid var(--green);margin-bottom:10px;}
+.btn-group{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center;}
+button{cursor:pointer;border:none;border-radius:5px;font-size:14px;padding:6px 12px;color:#fff;}
+.btn-green{background:var(--green);} .btn-blue{background:var(--blue);}
+.btn-orange{background:var(--orange);} .btn-red{background:var(--red);}
+.btn-purple{background:var(--purple);} .btn-grey{background:var(--grey);}
+.btn-teal{background:#0d9488;}
+.btn-small{padding:3px 8px;font-size:13px;}
+.btn-std{padding:6px 12px;}
+button:disabled{opacity:0.45;cursor:not-allowed;}
+/* label 固定窄寬度，輸入框一律改短 */
+.row,.row-address{display:grid;grid-template-columns:150px minmax(0,auto);gap:10px;margin:6px 0;align-items:center;}
+label{font-weight:600;}
+input[type=text],input[type=date],select{padding:5px 7px;border:1px solid #bbb;border-radius:4px;font-size:14px;}
+.w-xs{width:64px;}      /* 編號：最短 */
+.w-sm{width:80px;}      /* 小框 */
+.w-md{width:150px;}     /* 一般框（已改短） */
+.w-lg{width:220px;}     /* 較長框（備注等，已改短） */
+.w-addr{width:100%;}     /* 地址框（加長，撐滿整行） */
+/* 剔選組（同服務要求表格格式一致） */
+.ckgroup{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;}
+.ckitem{display:inline-flex;align-items:center;gap:4px;font-size:13px;white-space:nowrap;cursor:pointer;}
+.ckitem input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:#1a4d7c;}
+.inline-group{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.address-row{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:6px;}
+.batch-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #eee;}
+.record-item{display:flex;gap:10px;padding:10px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;background:#fafafa;}
+.record-item-checkbox{display:flex;align-items:flex-start;padding-top:4px;}
+.record-item-content{flex:1;}
+.preview-line{font-size:14px;line-height:1.6;}
+.full-detail{display:none;margin-top:6px;padding-top:6px;border-top:1px dashed #ccc;font-size:13px;line-height:1.7;}
+.full-detail.open{display:block;}
+.hidden-blur{filter:blur(4px);user-select:none;}
+.hidden-placeholder{display:none;color:#dc2626;font-size:13px;margin-top:4px;}
+.hidden-blur ~ .hidden-placeholder{display:block;}
+.tag{display:inline-block;background:#e0f2fe;color:#0369a1;padding:1px 8px;border-radius:10px;font-size:12px;margin:2px 3px 2px 0;}
+.item-btn-bar{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;}
+#editStatusBar{display:none;align-items:center;gap:6px;padding:6px 10px;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;font-size:13px;color:#9a3412;}
+@media (max-width:800px){
+    .row,.row-address{grid-template-columns:1fr;gap:4px 0;}
+}
+</style>
+</head>
+<body>
+<div class="main-wrap" id="mainWrap">
+
+<!-- ==================== 個案資料輸入 ==================== -->
+<div class="card card-top">
+    <div class="title-bar">📝 個案資料輸入</div>
+    <div class="btn-group">
+        <button class="btn-green btn-std" id="btnSave">💾 儲存個案</button>
+        <button class="btn-green btn-std" id="btnSaveEdit" disabled>✏️ 修改儲存</button>
+        <span id="editStatusBar"></span>
+        <button class="btn-green btn-std" id="btnReset">🔄 重設表單</button>
+        <span style="width:1px;height:24px;background:#ccc;margin:0 2px;"></span>
+        <!-- 僅保留【匯出】功能，無任何匯入 -->
+        <button class="btn-blue btn-std" id="btnExportAllExcel">📊 匯出全部 Excel</button>
+        <button class="btn-purple btn-std" id="btnExportBackup">⬇ JSON 備份</button>
+        <button class="btn-red btn-std" id="btnClearAll">🗑 清空全部紀錄</button>
+    </div>
+
+    <!-- 編號框改短 -->
+    <div class="row">
+        <label>編號</label>
+        <div class="inline-group">
+            <input type="text" id="inpId" class="w-xs">
+            <button class="btn-green btn-small" id="btnNewId">➕ 自動編號</button>
+        </div>
+    </div>
+    <div class="row"><label>姓名</label><input type="text" id="inpName" class="w-md"></div>
+    <div class="row">
+        <label>性別</label>
+        <select id="selGender" class="w-sm">
+            <option value=""></option>
+            <option value="男">男</option>
+            <option value="女">女</option>
+        </select>
+    </div>
+    <div class="row">
+        <label>出生日期</label>
+        <div class="inline-group">
+            <select id="selBirthYear" class="w-sm" style="width:110px;"><option value="">年</option></select>
+            <select id="selBirthMonth" class="w-xs" style="width:90px;"><option value="">月</option></select>
+            <select id="selBirthDay" class="w-xs" style="width:90px;"><option value="">日</option></select>
+            <span>｜</span>
+            <input type="text" id="inpBirthFull" class="w-md" placeholder="完整出生日期 YYYY-MM-DD" style="width:170px;">
+        </div>
+    </div>
+    <div class="row">
+        <label>年齡</label>
+        <div class="inline-group">
+            <input type="text" id="inpAge" class="w-sm" placeholder="可手動輸入" style="width:80px;">
+            <span id="ageHint" style="font-size:12px;color:#6b7280;">歲（選了出生日期會自動計算；也可直接手打）</span>
+        </div>
+    </div>
+    <!-- 聯絡電話號碼 -->
+    <div class="row"><label>聯絡電話號碼</label><input type="text" id="inpTel" class="w-md" maxlength="8" placeholder="8位數字（可留空）" onblur="validateTel8(this)"><span id="telWarn" style="color:#c00;font-size:12px;margin-left:6px;"></span></div>
+    <!-- 電郵地址（對應服務要求表格） -->
+    <div class="row"><label>電郵地址</label><input type="text" id="inpEmail" class="w-md" placeholder="（可留空）"></div>
+
+    <div class="row-address">
+        <label>住址</label>
+        <div>
+            <div class="address-row">
+                <div>
+                    <label style="font-size:14px;">地區</label>
+                    <select id="selDistrict" class="w-md">
+                        <option value="">--請選擇地區--</option>
+                        <option value="大澳">大澳</option>
+                        <option value="水口">水口</option>
+                        <option value="貝澳">貝澳</option>
+                        <option value="昂坪">昂坪</option>
+                        <option value="東涌">東涌</option>
+                        <option value="長沙">長沙</option>
+                        <option value="梅窩">梅窩</option>
+                        <option value="塘福">塘福</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size:14px;">村莊/地址</label>
+                    <select id="selVillage" class="w-md"><option value="">--先揀地區--</option></select>
+                </div>
+            </div>
+            <input type="text" id="inpAddr" class="w-addr" placeholder="地址（下拉輔助自動組合，也可自由手動輸入 / 修改）">
+        </div>
+    </div>
+
+    <div class="row">
+        <label>家庭類別<br><span style="font-size:11px;color:#6b7280;">（可選多於一項）</span></label>
+        <div class="ckgroup" id="famTypeGroup">
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="獨居長者">獨居長者</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="雙老家庭">雙老家庭</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="長者戶">長者戶</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="居於劏房的住戶">居於劏房的住戶</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="低收入住戶">低收入住戶</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="少數族裔人士">少數族裔人士</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="新來港住戶">新來港住戶</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="持雙程通行證來港照顧家人的人士">持雙程通行證來港照顧家人的人士</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="肢體傷殘人士">肢體傷殘人士</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="智障人士">智障人士</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="有精神健康需要人士">有精神健康需要人士</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="長期病患者">長期病患者</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="無酬主要照顧者">無酬主要照顧者</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="單親家長">單親家長</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="有特殊學習需要兒童">有特殊學習需要兒童</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="漁民戶">漁民戶</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="外籍家庭傭工">外籍家庭傭工</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="普通家庭">普通家庭</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="其他">其他</label>
+        </div>
+    </div>
+
+    <div class="row">
+        <label>特殊支援設備<br><span style="font-size:11px;color:#6b7280;">（可選多於一項）</span></label>
+        <div class="ckgroup" id="devGroup">
+            <label class="ckitem"><input type="checkbox" name="devCk" value="維持生命的電動醫療設備">維持生命的電動醫療設備</label>
+            <label class="ckitem"><input type="checkbox" name="devCk" value="緊急召援系統(例如：平安鐘)">緊急召援系統(例如：平安鐘)</label>
+            <label class="ckitem"><input type="checkbox" name="devCk" value="嚴重聽障人士的家居支援設備">嚴重聽障人士的家居支援設備</label>
+            <label class="ckitem"><input type="checkbox" name="devCk" value="需活動輔助器具">需活動輔助器具</label>
+            <label class="ckitem"><input type="checkbox" name="devCk" value="其他">其他</label>
+        </div>
+    </div>
+
+    <div class="row">
+        <label>工人</label>
+        <select id="selWorker" class="w-sm">
+            <option value=""></option>
+            <option value="有">有</option>
+            <option value="冇">冇</option>
+        </select>
+    </div>
+    <div class="row">
+        <label>平安鐘</label>
+        <select id="selBell" class="w-sm">
+            <option value=""></option>
+            <option value="有">有</option>
+            <option value="冇">冇</option>
+        </select>
+    </div>
+    <!-- 家屬姓名 -->
+    <div class="row"><label>家屬姓名</label><input type="text" id="inpFamilyName" class="w-md"></div>
+    <!-- 家屬電話 -->
+    <div class="row"><label>家屬電話</label><input type="text" id="inpFamilyTel" class="w-md"></div>
+    <div class="row">
+        <label>關係</label>
+        <select id="selRel" class="w-md">
+            <option value=""></option>
+            <option value="夫妻">夫妻</option>
+            <option value="兄弟">兄弟</option>
+            <option value="姊妹">姊妹</option>
+            <option value="兄妹">兄妹</option>
+            <option value="姊弟">姊弟</option>
+            <option value="父子">父子</option>
+            <option value="父女">父女</option>
+            <option value="母子">母子</option>
+            <option value="母女">母女</option>
+        </select>
+    </div>
+    <div class="row">
+        <label>政府福利</label>
+        <select id="selWelfare" class="w-md">
+            <option value=""></option>
+            <option value="長者生活津貼">長者生活津貼</option>
+            <option value="生果金">生果金</option>
+            <option value="綜援">綜援</option>
+            <option value="其他">其他</option>
+        </select>
+    </div>
+    <!-- 居住人數 -->
+    <div class="row"><label>居住人數</label><input type="text" id="inpLiveNum" class="w-sm"></div>
+    <div class="row"><label>備注</label><input type="text" id="inpRemark" class="w-lg"></div>
+    <div class="row">
+        <label>香港永久性居民</label>
+        <select id="selResident" class="w-sm">
+            <option value=""></option>
+            <option value="是">是</option>
+            <option value="否">否</option>
+        </select>
+    </div>
+    <!-- 職業 -->
+    <div class="row"><label>職業</label><input type="text" id="inpJob" class="w-md"></div>
+    <!-- 社署：I‑425 -->
+    <div class="row"><label>社署：I‑425</label><input type="text" id="inpI425" class="w-md"></div>
+    <!-- 個案編號 -->
+    <div class="row"><label>個案編號</label><input type="text" id="inpCaseNo" class="w-md"></div>
+    <div class="row">
+        <label>要求的服務<br><span style="font-size:11px;color:#6b7280;">（可選多於一項）</span></label>
+        <div class="ckgroup" id="srvGroup">
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="社會福利署的支援服務">社會福利署的支援服務</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="兒童暫托服務">兒童暫托服務</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="長者/病人陪診服務">長者/病人陪診服務</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="照顧者支援">照顧者支援</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="情緒輔導服務">情緒輔導服務</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="精神健康服務">精神健康服務</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="申請公共房屋">申請公共房屋</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="大廈管理事宜">大廈管理事宜</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="改善*環境衞生/消防隱患/治安情況">改善*環境衞生/消防隱患/治安情況</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="其他">其他</label>
+        </div>
+    </div>
+    <div class="row"><label>服務要求詳情</label><input type="text" id="inpServiceNeed" class="w-lg"></div>
+    <!-- 服務日期 -->
+    <div class="row"><label>服務日期</label><input type="date" id="inpServiceDate" class="w-md"></div>
+</div>
+
+<!-- ==================== 個案資料列表 ==================== -->
+<div class="card card-left">
+    <div class="title-bar">📋 個案資料列表</div>
+    <div class="batch-bar">
+        <button class="btn-orange btn-small" id="btnHideAllOld">🙈 隱藏全部</button>
+        <button class="btn-orange btn-small" id="btnShowAllOld">👁 顯示全部</button>
+        <button class="btn-red btn-small" id="btnClearOldImport">🗑 清空列表</button>
+    </div>
+    <div id="oldImportListBox"></div>
+</div>
+
+</div>
+
+<script>
+/* ==================== 儲存鍵 ==================== */
+const STORAGE_KEY = "islandCaseData";
+const STORAGE_OLD_IMPORT = "oldImportList";
+
+/* ==================== 全域狀態 ==================== */
+let dataList = [];           // 主個案庫
+let oldImportList = [];      // 個案資料列表（主庫鏡像）
+let editingId = null;        // 正在編輯的編號
+
+/* ==================== 工具函式 ==================== */
+function cleanSpaceStr(s){ return String(s||"").replace(/\s+/g," ").trim(); }
+
+/* 剔選組：收集所有勾選值，用「、」分隔；支援「、」「,」「，」分隔回填 */
+function getCheckedList(name){
+    return [...document.querySelectorAll("input[name="+name+"]:checked")].map(c=>c.value).join("、");
+}
+function setCheckedList(name, str){
+    const vals = String(str||"").split(/[、,，]/).map(s=>s.trim()).filter(Boolean);
+    document.querySelectorAll("input[name="+name+"]").forEach(c=>{ c.checked = vals.includes(c.value); });
+}
+
+function getFormData(){
+    const get = id => document.getElementById(id).value.trim();
+    const birthFull = get("inpBirthFull");          // 完整出生日期 YYYY-MM-DD
+    // 年齡：手動輸入優先；否則由出生日期自動計算；再否則用年齡框的值
+    let age = "";
+    if(ageManuallySet && get("inpAge")){
+        age = get("inpAge");
+    }else{
+        age = calcAgeFromBirth(birthFull) || get("inpAge");
+    }
+    return {
+        id: get("inpId"),
+        name: get("inpName"),
+        gender: get("selGender"),
+        birthFull: birthFull,                        // 出生日期（完整）
+        birthAge: age,                              // 年齡（純數字字串）
+        tel: get("inpTel"),
+        addr: get("inpAddr"),
+        district: get("selDistrict"),
+        village: get("selVillage"),
+        familyType: getCheckedList("famTypeCk"),
+        worker: get("selWorker"),
+        bell: get("selBell"),
+        email: get("inpEmail"),
+        devices: getCheckedList("devCk"),
+        services: getCheckedList("srvCk"),
+        famName: get("inpFamilyName"),
+        famTel: get("inpFamilyTel"),
+        relation: get("selRel"),
+        welfare: get("selWelfare"),
+        liveNum: get("inpLiveNum"),
+        remark: get("inpRemark"),
+        hkResident: get("selResident"),
+        job: get("inpJob"),
+        i425: get("inpI425"),
+        caseNo: get("inpCaseNo"),
+        serviceNeed: get("inpServiceNeed"),
+        serviceDate: get("inpServiceDate"),
+        isHidden: false
+    };
+}
+
+function formReset(){
+    document.querySelectorAll("input,select").forEach(el=>{ if(el.type!=="file") el.value=""; });
+    document.querySelectorAll("input[type=checkbox]").forEach(c=>{ c.checked=false; });
+    ageManuallySet = false;
+    document.getElementById("editStatusBar").style.display="none";
+    editingId = null;
+    document.getElementById("btnSaveEdit").disabled = true;
+    document.getElementById("btnSave").disabled = false;
+    refreshNextId();
+}
+
+/* ==================== 編號 ==================== */
+function extractNumberFromId(id){
+    if(!id) return 0;
+    const m = String(id).match(/(\d+)$/);
+    return m ? parseInt(m[1],10) : 0;
+}
+function getNextId(){
+    let max = 0;
+    dataList.forEach(r => { const n = extractNumberFromId(r.id); if(n>max) max=n; });
+    oldImportList.forEach(r => { const n = extractNumberFromId(r.id); if(n>max) max=n; });
+    return String(max+1);
+}
+function refreshNextId(){
+    if(!editingId){
+        document.getElementById("inpId").value = getNextId();
+    }
+}
+
+/* ==================== 本地儲存 ==================== */
+function saveAllLocal(){
+    try{
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(dataList));
+        localStorage.setItem(STORAGE_OLD_IMPORT, JSON.stringify(oldImportList));
+    }catch(e){
+        alert("⚠️ 本地儲存空間已滿，請先備份並清空部分舊紀錄。");
+    }
+}
+function loadLocal(){
+    try{
+        const d = localStorage.getItem(STORAGE_KEY);
+        if(d) dataList = JSON.parse(d) || [];
+        const o = localStorage.getItem(STORAGE_OLD_IMPORT);
+        if(o) oldImportList = JSON.parse(o) || [];
+        // 若舊匯入列表為空但主庫有資料，自動同步
+        if(oldImportList.length===0 && dataList.length>0) oldImportList = dataList.slice();
+        // 資料遷移：舊版把「完整出生日期」存在 birthAge，統一搬到 birthFull，年齡由日期計算
+        const dateLike = s => /^(\d{4})[-./]\d{1,2}[-./]\d{1,2}/.test(String(s||""));
+        [dataList, oldImportList].forEach(arr => arr.forEach(r => {
+            if(!r.birthFull && r.birthAge && dateLike(r.birthAge)){
+                r.birthFull = r.birthAge;          // 原本的日期字串歸位到 birthFull
+                r.birthAge = calcAgeFromBirth(r.birthFull) || "";  // 年齡改為計算值
+            }
+        }));
+    }catch(e){ dataList=[]; oldImportList=[]; }
+}
+
+/* ==================== 出生日期下拉 ==================== */
+function initBirthSelectors(){
+    const y = document.getElementById("selBirthYear");
+    const m = document.getElementById("selBirthMonth");
+    const d = document.getElementById("selBirthDay");
+    const now = new Date();
+    function makeOpt(sel, val, text){
+        const o = document.createElement("option");
+        o.value = val; o.textContent = text == null ? val : text;
+        sel.appendChild(o);
+    }
+    for(let yy=now.getFullYear(); yy>=1900; yy--) makeOpt(y, String(yy));
+    for(let mm=1; mm<=12; mm++) makeOpt(m, String(mm).padStart(2,"0"));
+    function fillDays(){
+        const days = new Date(y.value||2000, (m.value||1), 0).getDate();
+        const cur = d.value;
+        d.innerHTML = '<option value="">日</option>';
+        for(let dd=1; dd<=days; dd++) makeOpt(d, String(dd).padStart(2,"0"));
+        if(cur) d.value = cur;
+    }
+    y.addEventListener("change", fillDays);
+    m.addEventListener("change", fillDays);
+    fillDays();
+}
+let ageManuallySet = false;   // 使用者是否手動改過年齡
+
+function calcAgeFromBirth(birthStr){
+    if(!birthStr) return "";
+    const s = String(birthStr).trim();
+    const m = s.match(/^(\d{4})(?:[-./](\d{1,2}))?(?:[-./](\d{1,2}))?$/);
+    if(!m) return "";
+    const by = +m[1], bm = m[2] ? +m[2] : null, bd = m[3] ? +m[3] : null;
+    const today = new Date();
+    let age = today.getFullYear() - by;
+    // 沒填月 → 以年中(7月1日)估算；沒填日 → 以月初估算
+    if(bm !== null){
+        if(today.getMonth()+1 < bm) age--;
+        else if(today.getMonth()+1 === bm){
+            if(bd !== null && today.getDate() < bd) age--;
+        }
+    }
+    return age >= 0 ? String(age) : "";
+}
+
+function syncBirthFull(){
+    const y=document.getElementById("selBirthYear").value;
+    const m=document.getElementById("selBirthMonth").value;
+    const d=document.getElementById("selBirthDay").value;
+    const fullEl = document.getElementById("inpBirthFull");
+    const ageEl  = document.getElementById("inpAge");
+    if(!y) return;                       // 連「年」都沒選就不動
+    // 自由組合：年 / 年-月 / 年-月-日，視已選的部份而定
+    let full = y;
+    if(m) full += "-" + m;
+    if(m && d) full += "-" + d;
+    fullEl.value = full;
+    // 選了出生日期 → 自動計算年齡並顯示（除非使用者剛手動改過年齡）
+    if(!ageManuallySet){
+        const age = calcAgeFromBirth(full);
+        if(age !== "") ageEl.value = age;
+    }
+}
+// 年齡框：使用者手動輸入時，標記為「手動」，避免被出生日期覆蓋
+document.getElementById("inpAge").addEventListener("input", function(){
+    ageManuallySet = (this.value.trim() !== "");
+});
+// 出生日期輸入框：允許直接手打（如 1990、1990-05），同步年齡
+document.getElementById("inpBirthFull").addEventListener("input", function(){
+    if(!ageManuallySet){
+        const age = calcAgeFromBirth(this.value);
+        if(age !== "") document.getElementById("inpAge").value = age;
+    }
+});
+["selBirthYear","selBirthMonth","selBirthDay"].forEach(id=>{
+    document.getElementById(id).addEventListener("change", syncBirthFull);
+});
+
+/* ==================== 住址聯動 ==================== */
+const VILLAGE_MAP = {
+    "大澳": ["二涌棚","二澳","三涌棚","上羗山村","上羗山鹿湖村","下羗山村","大浪灣","大涌棚","大澳吉慶街棚","大澳道","天利苑","太平街","太平街二涌棚","太平街三涌棚","太平街沙仔面棚","太平街後座","太平街新沙棚","北山村","半路棚","永安街","石仔埗","石仔埗大澳花園","石仔埗半路棚","石仔埗生釣棚","石仔埗沙角咀","石仔埗街","石仔埗街A段","吉慶前街","吉慶後街","吉慶後街棚","吉慶街","吉慶街後","坑尾村","沙仔面","沙仔面棚","南涌村","南涌新村","梁屋村","深石村","深屈村","散頭村","番鬼塘村","街市街","街市街大涌棚","新沙棚","新基棚","新基街","橫坑村","龍田邨天成樓","龍田邨天財樓","龍田邨天喜樓","龍田邨天富樓","龍田邨天貴樓","龍田邨天寧樓","龍田邨天福樓","龍田邨天德樓","龍田邨龍田商場","龍軒苑A座","龍軒苑B座","龍軒苑永軒閣","龍軒苑永軒閣地下","龍軒苑暢軒閣","龍軒苑暢軒閣地下","龍軒苑錦軒閣","龍軒苑錦軒閣地下","龍軒苑鱗軒閣","龍軒苑麟軒閣"],
+    "水口": ["水口村"],
+    "貝澳": ["老圍村","新圍村","咸田村","咸田新村","咸田舊村","拾塱涌口","拾塱舊村","富瑤小築","羅屋村"],
+    "昂坪": ["昂坪村","妙香林","法嚴精舍","青蓮苑","致志蓮若","悟覺","般若苑","常德林","菩提閣","輸陀園","療養院","叢苑","寶蓮禪寺","覺慈淨苑"],
+    "東涌": ["上嶺皮村","下嶺皮村","石門甲村","石榴埔村","赤鱲角村","馬灣村","馬灣涌村","馬灣新村","莫家村","散頭村","黃泥屋","黃家圍村","䃟頭村","壩尾村"],
+    "長沙": ["長沙下村"],
+    "梅窩": ["大地塘村","大地塘村新龍圍","大地塘南邊圍","梅窩大廈","梅窩中心","牛牯灣","白銀鄉村","石榴園","來來老人院","卓濤軒第","東灣頭","東灣頭路","虎崗山","南邊圍","家樂閣","海景大廈","涌口村","涌口街","涌口道","荔枝園村","鹿地塘下村塱","鹿地塘村","麻布村","麻埔村","菜園村","鄉事會路","圓卓村","新龍圍","稔埔村","窩田村","銀河苑銀旭閣","銀河苑銀朗閣","銀河灣畔","銀景中心","銀運路","銀蔚苑","銀輝大廈","銀寶大廈","銀寶中心","銀礦中心","銀礦灣路","銀灣邨銀日樓A座","銀灣邨銀日樓B座","銀灣邨銀月樓","銀灣邨銀星樓","銀灣邨銀虹樓","橫塘村","龍尾村","嶺咀頭村","舊村"],
+    "塘福": ["塘福村"]
+};
+document.getElementById("selDistrict").addEventListener("change", function(){
+    const v = document.getElementById("selVillage");
+    v.innerHTML = '<option value="">--請選擇村莊--</option>';
+    (VILLAGE_MAP[this.value]||[]).forEach(x => {
+        const o = document.createElement("option");
+        o.value = x; o.textContent = x;
+        v.add(o);
+    });
+    composeFullAddress();   // 地區變了，重新組合地址
+});
+document.getElementById("selVillage").addEventListener("change", composeFullAddress);
+
+// 由「地區 + 村莊/地址」自動組合成地址，填入可手動編輯的輸入框
+function composeFullAddress(){
+    const district = document.getElementById("selDistrict").value;
+    const village  = document.getElementById("selVillage").value;
+    const addrEl   = document.getElementById("inpAddr");
+    if(!district && !village) return;       // 兩個都沒選就不動，保留手動內容
+    let parts = [];
+    if(district) parts.push(district);
+    if(village) parts.push(village);
+    addrEl.value = parts.join("");
+}
+
+/* ==================== 電話驗證 ==================== */
+function validateTel8(input){
+    const v = input.value.trim();
+    document.getElementById("telWarn").textContent = (v && !/^\d{8}$/.test(v)) ? "⚠ 應為8位數字" : "";
+}
+
+/* ==================== 編輯狀態列 ==================== */
+function updateEditStatus(){
+    const bar = document.getElementById("editStatusBar");
+    if(editingId){
+        bar.style.display = "inline-flex";
+        bar.innerHTML = `✏️ 正在編輯：<b>編號 ${editingId}</b>｜<span style="color:#16a34a;">（修改後按「修改儲存」原位保存）</span>`;
+    }else{
+        bar.style.display = "none";
+    }
+}
+
+/* ==================== 儲存 / 編輯 ==================== */
+function doSave(){
+    const data = getFormData();
+    if(!data.name){ alert("請填寫姓名"); return; }
+
+    if(editingId){
+        // 編輯模式：原位更新
+        const idx = dataList.findIndex(r => String(r.id)===String(editingId));
+        if(idx>=0) dataList[idx] = {...dataList[idx], ...data, id: editingId};
+        const oIdx = oldImportList.findIndex(r => String(r.id)===String(editingId));
+        if(oIdx>=0) oldImportList[oIdx] = {...oldImportList[oIdx], ...data, id: editingId};
+        formReset();
+    }else{
+        // 新增模式
+        if(!data.id) data.id = getNextId();
+        dataList.push(data);
+        oldImportList = dataList.slice();
+        formReset();
+    }
+    saveAllLocal();
+    renderAllList();
+    refreshNextId();
+}
+
+function editRecord(id){
+    const rec = oldImportList.find(r => String(r.id)===String(id)) || dataList.find(r => String(r.id)===String(id));
+    if(!rec) return;
+    editingId = String(rec.id);
+    ageManuallySet = false;                      // 重置「手動年齡」標記
+    const set = (id,val)=>{ const el=document.getElementById(id); if(el) el.value = val||""; };
+    set("inpId", rec.id);
+    set("inpName", rec.name);
+    set("selGender", rec.gender);
+    // 出生日期：回填（支援 年 / 年-月 / 年-月-日 各種完整度），解析到年/月/日下拉
+    const bf = rec.birthFull || rec.birthAge || "";
+    const bm = String(bf).match(/^(\d{4})(?:[-./](\d{1,2}))?(?:[-./](\d{1,2}))?/);
+    if(bm && bm[1]){
+        set("selBirthYear", bm[1]);
+        if(bm[2]) set("selBirthMonth", String(+bm[2]).padStart(2,"0"));
+        if(bm[3]) set("selBirthDay", String(+bm[3]).padStart(2,"0"));
+    }
+    set("inpBirthFull", bf);
+    // 年齡：優先用已存年齡，否則由出生日期計算
+    set("inpAge", rec.birthAge || calcAgeFromBirth(bf) || "");
+    set("inpTel", rec.tel);
+    // 地址：先回填地區 → 觸發下拉填充 → 再回填村莊，最後回填地址
+    set("selDistrict", rec.district);
+    document.getElementById("selDistrict").dispatchEvent(new Event("change"));
+    set("selVillage", rec.village);
+    set("inpAddr", rec.addr);                    // 地址直接顯示（可手動再編輯）
+    setCheckedList("famTypeCk", rec.familyType);
+    set("selWorker", rec.worker);
+    set("selBell", rec.bell);
+    set("inpEmail", rec.email);
+    setCheckedList("devCk", rec.devices);
+    setCheckedList("srvCk", rec.services);
+    set("inpFamilyName", rec.famName);
+    set("inpFamilyTel", rec.famTel);
+    set("selRel", rec.relation);
+    set("selWelfare", rec.welfare);
+    set("inpLiveNum", rec.liveNum);
+    set("inpRemark", rec.remark);
+    set("selResident", rec.hkResident);
+    set("inpJob", rec.job);
+    set("inpI425", rec.i425);
+    set("inpCaseNo", rec.caseNo);
+    set("inpServiceNeed", rec.serviceNeed);
+    set("inpServiceDate", rec.serviceDate);
+    updateEditStatus();
+    document.getElementById("btnSaveEdit").disabled = false;
+    document.getElementById("btnSave").disabled = true;
+    window.scrollTo({top:0, behavior:"smooth"});
+}
+
+/* ==================== 渲染列表 ==================== */
+function renderRecordBox(boxDom, arr, listKey){
+    if(arr.length===0){
+        boxDom.innerHTML = '<div style="color:#9ca3af;padding:20px;text-align:center;">暫無資料</div>';
+        return;
+    }
+    boxDom.innerHTML = arr.map((item, idx) => {
+        const hideState = item.isHidden;
+        const preview = `
+            <span class="tag">編號 ${item.id}</span>
+            <span class="tag">姓名 <b>${item.name||"-"}</b></span>
+            <span class="tag">${item.tel||"無電話"}</span>
+            <span class="tag more">＋更多</span>`;
+        const detail = `
+            <div>出生日期：${item.birthFull||""}｜年齡：${item.birthAge||""} 歲</div>
+            <div>電話：${item.tel||""}｜地址：${item.addr||""}</div>
+            <div>家庭類別：${item.familyType||""}｜工人：${item.worker||""}｜平安鐘：${item.bell||""}</div>
+            <div>設備：${item.devices||""}｜電郵：${item.email||""}</div>
+            <div>要求的服務：${item.services||""}</div>
+            <div>家屬：${item.famName||""}｜家屬電話：${item.famTel||""}｜關係：${item.relation||""}</div>
+            <div>福利：${item.welfare||""}｜居住人數：${item.liveNum||""}</div>
+            <div>永久居民：${item.hkResident||""}｜職業：${item.job||""}</div>
+            <div>I‑425：${item.i425||""}｜個案編號：${item.caseNo||""}</div>
+            <div>服務要求：${item.serviceNeed||""}</div>
+            <div>服務日期：${item.serviceDate||""}</div>
+            <div>備注：${item.remark||""}</div>`;
+        return `
+        <div class="record-item" data-id="${item.id}">
+            <div class="record-item-content collapsed">
+                <div class="preview-line ${hideState?'hidden-blur':''}">${preview}</div>
+                <div class="full-detail ${hideState?'hidden-blur':''}">${detail}</div>
+                <div class="hidden-placeholder"><span>🔒</span><span>已隱藏：編號 ${item.id}</span></div>
+                <div class="item-btn-bar">
+                    <button class="btn-teal btn-small btnPrintForm" data-id="${item.id}">🖨️ 列印表格</button>
+                    <button class="btn-orange btn-small btnEdit" data-id="${item.id}">✏️ 編輯</button>
+                    <button class="btn-blue btn-small btnToggleDetail" data-id="${item.id}">🔽 展開全部</button>
+                    <button class="btn-grey btn-small btnToggleHide" data-id="${item.id}">${hideState?"👁 顯示":"🙈 隱藏"}</button>
+                    <button class="btn-red btn-small btnDelete" data-id="${item.id}">🗑 刪除</button>
+                </div>
+            </div>
+        </div>`;
+    }).join("");
+}
+
+function delegateListEvents(boxDom){
+    boxDom.addEventListener("click", function(e){
+        const t = e.target;
+        const id = t.dataset.id;
+        if(!id) return;
+        if(t.classList.contains("btnEdit")){
+            editRecord(id);
+        }else if(t.classList.contains("btnPrintForm")){
+            const rec = oldImportList.find(r => String(r.id)===String(id));
+            if(!rec) return;
+            const q = encodeURIComponent(JSON.stringify(rec));
+            window.open("服務要求表格.html?case=" + q, "_blank");
+        }else if(t.classList.contains("btnDelete")){
+            if(!confirm("確定刪除編號 "+id+" ？")) return;
+            oldImportList = oldImportList.filter(r => String(r.id)!==String(id));
+            dataList = dataList.filter(r => String(r.id)!==String(id));
+            saveAllLocal();
+            renderAllList();
+            refreshNextId();
+        }else if(t.classList.contains("btnToggleDetail")){
+            const det = t.closest(".record-item-content").querySelector(".full-detail");
+            det.classList.toggle("open");
+            t.textContent = det.classList.contains("open") ? "🔼 收合" : "🔽 展開全部";
+        }else if(t.classList.contains("btnToggleHide")){
+            const rec = oldImportList.find(r => String(r.id)===String(id));
+            if(rec) rec.isHidden = !rec.isHidden;
+            saveAllLocal();
+            renderAllList();
+        }
+    });
+}
+
+/* 列表恆顯全部（已取消關鍵字查詢） */
+function renderAllList(){
+    renderRecordBox(document.getElementById("oldImportListBox"), oldImportList, "oldImport");
+}
+
+/* ==================== 隱藏 / 顯示全部 ==================== */
+document.getElementById("btnHideAllOld").addEventListener("click", function(){
+    let count=0;
+    oldImportList.forEach(item => { if(!item.isHidden){ item.isHidden=true; count++; } });
+    if(count>0){ saveAllLocal(); renderAllList(); }
+});
+document.getElementById("btnShowAllOld").addEventListener("click", function(){
+    let count=0;
+    oldImportList.forEach(item => { if(item.isHidden){ item.isHidden=false; count++; } });
+    if(count>0){ saveAllLocal(); renderAllList(); }
+});
+
+/* ==================== 清空列表 ==================== */
+document.getElementById("btnClearOldImport").addEventListener("click", function(){
+    if(!confirm("清空個案資料列表？（同時會清空主個案庫）")) return;
+    oldImportList=[];
+    dataList=[];
+    saveAllLocal();
+    renderAllList();
+    refreshNextId();
+});
+
+document.getElementById("btnClearAll").addEventListener("click", function(){
+    if(!confirm("確定清空全部個案紀錄？此操作不可還原（建議先 JSON 備份）")) return;
+    oldImportList=[];
+    dataList=[];
+    saveAllLocal();
+    renderAllList();
+    refreshNextId();
+});
+
+/* ==================== Excel 匯出（僅匯出，無匯入） ==================== */
+const EXCEL_HEADER = ["編號","姓名","性別","出生日期","年齡","電話","電郵地址","地址",
+    "家庭類別","工人","平安鐘","特殊支援設備","家屬姓名","家屬電話","關係","政府福利","居住人數","備注",
+    "香港永久性居民","職業","社署：I‑425","個案編號","要求的服務","服務要求詳情","服務日期"];
+
+function listToSheetRows(list){
+    return list.map(r => [
+        r.id,r.name,r.gender,r.birthFull||"",r.birthAge||"",r.tel,r.email||"",r.addr,
+        r.familyType,r.worker,r.bell,r.devices||"",r.famName,r.famTel,r.relation,r.welfare,
+        r.liveNum,r.remark,r.hkResident,r.job,r.i425,r.caseNo,r.services||"",r.serviceNeed,r.serviceDate
+    ]);
+}
+
+function exportExcel(rows, filename, sheetName){
+    if(typeof XLSX === "undefined"){
+        alert("⚠️ Excel 庫尚未載入，請檢查網絡或稍後重試");
+        return;
+    }
+    const ws = XLSX.utils.aoa_to_sheet([EXCEL_HEADER, ...rows]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    XLSX.writeFile(wb, filename);
+}
+
+/* 匯出全部 Excel */
+document.getElementById("btnExportAllExcel").addEventListener("click", function(){
+    if(oldImportList.length===0){ alert("暫無資料可匯出"); return; }
+    exportExcel(listToSheetRows(oldImportList), "個案資料全部.xlsx", "個案資料");
+});
+
+/* ==================== JSON 備份（僅匯出下載，無匯入） ==================== */
+document.getElementById("btnExportBackup").addEventListener("click", function(){
+    const backup = {
+        _version: 1,
+        _time: new Date().toISOString(),
+        dataList: dataList
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], {type:"application/json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "個案備份.json";
+    a.click();
+});
+
+/* ==================== 按鈕綁定 ==================== */
+document.getElementById("btnSave").addEventListener("click", doSave);
+document.getElementById("btnSaveEdit").addEventListener("click", doSave);
+document.getElementById("btnReset").addEventListener("click", function(){
+    if(editingId){ formReset(); }
+    else if(confirm("重設表單？")) formReset();
+});
+document.getElementById("btnNewId").addEventListener("click", function(){
+    editingId = null;
+    updateEditStatus();
+    document.getElementById("btnSaveEdit").disabled = true;
+    document.getElementById("btnSave").disabled = false;
+    refreshNextId();
+});
+
+/* ==================== 初始化 ==================== */
+function init(){
+    initBirthSelectors();
+    loadLocal();
+    renderAllList();
+    delegateListEvents(document.getElementById("oldImportListBox"));
+    refreshNextId();
+}
+init();
+</script>
+</body>
+</html>
