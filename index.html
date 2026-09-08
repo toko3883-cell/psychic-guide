@@ -1,0 +1,1875 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>離島社署個案綜合系統｜標題位置+4頁列印+功能完整修復</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+// 密碼改存 SHA-256 指紋（唔再明文寫死，睇 source 都睇唔到真密碼）
+const PW1_HASH = "a49eeadd3c768918844793a63e837834fbe4e42c8853fecdc76edb5f6c9a6e9b";
+const PW2_HASH = "e28133a0a683a994ca27fc241be4a0524e4d4455e8511011f65fb69174062fa0";
+
+window.addEventListener('DOMContentLoaded', function(){
+    initLogin();
+});
+
+function initLogin(){
+    const overlay = document.getElementById("loginOverlay");
+    const pw1 = document.getElementById("loginPw1");
+    const pw2 = document.getElementById("loginPw2");
+    const show = document.getElementById("loginShowPw");
+    const btn = document.getElementById("loginBtn");
+    const err = document.getElementById("loginErr");
+    pw1.focus();
+    pw1.addEventListener("keydown", function(e){ if(e.key === "Enter") pw2.focus(); });
+    pw2.addEventListener("keydown", function(e){ if(e.key === "Enter") doLogin(); });
+    btn.addEventListener("click", doLogin);
+    show.addEventListener("change", function(){
+        const t = show.checked ? "text" : "password";
+        pw1.type = t;
+        pw2.type = t;
+    });
+    async function doLogin(){
+        err.textContent = "";
+        const lock = getLockState();
+        if(lock && lock.until > Date.now()){
+            const mins = Math.ceil((lock.until - Date.now())/60000);
+            err.textContent = "🔒 錯誤次數過多，已鎖定，請 " + mins + " 分鐘後再試";
+            return;
+        }
+        const h1 = await sha256Hex(pw1.value);
+        const h2 = await sha256Hex(pw2.value);
+        if(h1 !== PW1_HASH || h2 !== PW2_HASH){
+            const st = getLockState() || {n:0, until:0};
+            st.n = (st.n||0) + 1;
+            if(st.n >= 5){
+                st.until = Date.now() + 10*60000;
+                st.n = 0;
+                err.textContent = "🔒 連續錯誤 5 次，已鎖定 10 分鐘";
+            } else {
+                err.textContent = "❌ 密碼錯誤（第 " + st.n + "/5 次）";
+            }
+            try{ localStorage.setItem(LOCK_KEY, JSON.stringify(st)); }catch(e){}
+            pw1.value = ""; pw2.value = "";
+            pw1.focus();
+            return;
+        }
+        localStorage.removeItem(LOCK_KEY);
+        _aesKey = await deriveKey(pw1.value + "|" + pw2.value);
+        overlay.style.display = "none";
+        document.getElementById("mainContentWrap").style.display = "block";
+        startIdleTimer();
+        mainInit();
+    }
+}
+</script>
+<style>
+:root{
+    --green:#16a34a; --blue:#2563eb; --orange:#ea580c;
+    --red:#dc2626; --purple:#7c3aed; --grey:#6b7280;
+}
+*{box-sizing:border-box;}
+body{
+    font-family:"Microsoft YaHei","PingFang TC","Heiti TC",sans-serif;
+    margin:0; padding:16px; background:#f3f4f6; color:#1f2937; font-size:15px;
+}
+#mainContentWrap{ display:none; }
+#loginOverlay{
+    position:fixed; inset:0; background:rgba(15,40,70,.93);
+    display:flex; align-items:center; justify-content:center; z-index:9999;
+}
+.login-box{
+    background:#fff; border-radius:12px; padding:26px 30px; width:330px;
+    box-shadow:0 12px 44px rgba(0,0,0,.45); text-align:center;
+}
+.login-box h3{margin:0 0 4px;color:#1a4d7c;font-size:17px;}
+.login-box .login-sub{font-size:12px;color:#6b7280;margin-bottom:10px;}
+.login-box label{display:block;font-size:13px;color:#374151;margin:12px 0 4px;text-align:left;}
+.login-box input[type=password],.login-box input[type=text]{
+    width:100%;padding:9px 10px;font-size:20px;letter-spacing:8px;text-align:center;
+    border:1px solid #bbb;border-radius:6px;
+}
+.login-box .show-row{
+    display:flex;align-items:center;justify-content:center;gap:6px;
+    font-size:13px;color:#374151;margin-top:14px;cursor:pointer;user-select:none;
+}
+.login-box .show-row input{width:15px;height:15px;accent-color:#1a4d7c;cursor:pointer;}
+.login-box .login-btn{
+    width:100%;margin-top:14px;padding:11px;background:#1a4d7c;color:#fff;
+    border:none;border-radius:6px;font-size:15px;font-weight:700;cursor:pointer;
+}
+.login-box .login-btn:hover{background:#163e66;}
+#loginErr{color:#dc2626;font-size:13px;margin-top:10px;min-height:18px;text-align:center;}
+#printAllContainer{display:none;}
+@media print{
+    body.printing-all .print-section{display:none !important;}
+    body.printing-all #printAllContainer{display:block !important;}
+}
+.search-box{display:flex;align-items:center;gap:6px;}
+.search-box input{padding:5px 9px;border:1px solid #bbb;border-radius:4px;font-size:14px;width:200px;}
+.sel-count{font-size:13px;color:#1d4ed8;font-weight:600;}
+.main-wrap{
+    display:grid;
+    grid-template-areas:"top""left";
+    grid-template-rows: auto 1fr;
+    gap:14px;
+    max-width:1200px; margin:0 auto;
+}
+.card{background:#fff;border:1px solid #aaa;padding:12px;border-radius:6px;overflow:auto;min-height:0;}
+.card-top{grid-area:top;}
+.card-left{grid-area:left;min-width:0;}
+.title-bar{font-weight:bold;font-size:16px;padding:6px 0 10px;border-bottom:2px solid var(--green);margin-bottom:10px;}
+.btn-group{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;align-items:center;}
+button{cursor:pointer;border:none;border-radius:5px;font-size:14px;padding:6px 12px;color:#fff;}
+.btn-green{background:var(--green);} .btn-blue{background:var(--blue);}
+.btn-orange{background:var(--orange);} .btn-red{background:var(--red);}
+.btn-purple{background:var(--purple);} .btn-grey{background:var(--grey);}
+.btn-teal{background:#0d9488;}
+.btn-small{padding:3px 8px;font-size:13px;}
+.btn-std{padding:6px 12px;}
+button:disabled{opacity:0.45;cursor:not-allowed;}
+.row,.row-address{display:grid;grid-template-columns:150px minmax(0,auto);gap:10px;margin:6px 0;align-items:center;}
+label{font-weight:600;}
+input[type=text],input[type=date],select{padding:5px 7px;border:1px solid #bbb;border-radius:4px;font-size:14px;}
+.w-xs{width:100px;}
+.w-sm{width:80px;}
+.w-md{width:150px;}
+.w-lg{width:220px;}
+.w-addr{width:100%;}
+.ckgroup{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;}
+.ckitem{display:inline-flex;align-items:center;gap:4px;font-size:13px;white-space:nowrap;cursor:pointer;}
+.ckitem input[type=checkbox]{width:14px;height:14px;margin:0;cursor:pointer;accent-color:#1a4d7c;}
+.inline-group{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.address-row{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:6px;}
+.batch-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #eee;}
+#btnFloatTop{
+    position: fixed; right: 14px; bottom: 20px;
+    width: 46px; height: 46px; border-radius: 50%;
+    border: none; background: #1d4ed8; color: #fff;
+    font-size: 20px; box-shadow: 0 3px 10px rgba(0,0,0,.35);
+    cursor: pointer; z-index: 999;
+}
+#btnFloatTop:hover{ background: #1e40af; }
+.record-item{display:flex;gap:10px;padding:10px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;background:#fafafa;}
+.record-item-checkbox{display:flex;align-items:flex-start;padding-top:4px;}
+.record-item-content{flex:1;}
+.preview-line{font-size:16px;line-height:1.6;}
+.full-detail{display:none;margin-top:6px;padding-top:6px;border-top:1px dashed #ccc;font-size:15px;line-height:1.7;}
+.full-detail.open{display:block;}
+.tag{display:inline-block;background:#e0f2fe;color:#0369a1;padding:1px 8px;border-radius:10px;font-size:13px;margin:2px 3px 2px 0;}
+.item-btn-bar{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;}
+#editStatusBar{display:none;align-items:center;gap:6px;padding:6px 10px;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;font-size:13px;color:#9a3412;}
+
+:root {
+    --ink: #000;--line: #000;
+    --font: "PMingLiU", "新細明體", "MingLiU", "Times New Roman", serif;
+}
+.print-section{margin-top:40px;}
+.page {
+    width: 210mm;
+    min-height: 297mm;
+    margin: 8mm auto;
+    background: #fff;
+    padding: 12mm 14mm 10mm 12mm;
+    box-shadow: 0 0 8px rgba(0,0,0,.25);
+    position: relative;
+}
+/* 第一頁專用：縮細頂部留白，標題向上移 */
+.page-first{
+    padding:4mm 14mm 10mm 12mm;
+}
+.page-break{
+    page-break-after: always;
+}
+.toolbar {
+    position: sticky; top: 0; z-index: 999;background: #1a4d7c; color: #fff;
+    padding: 10px 16px;display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    font-family: "Microsoft JhengHei", "PingFang TC", sans-serif;font-size: 14px;
+}
+.toolbar .brand { font-weight: bold; margin-right: auto; }
+.toolbar button {
+    background: #f0a500; color: #fff; border: none;padding: 8px 18px; border-radius: 6px; cursor: pointer;
+    font-size: 15px; font-weight: 700;
+}
+.toolbar button:hover { background: #d89400; }
+.toolbar select {
+    background: #fff; color: #1a4d7c; border: 1px solid #ccc;border-radius: 6px; padding: 7px 10px; font-size: 14px;
+    max-width: 340px;
+}
+.title1 {
+    text-align: center; font-weight: bold; font-size: 14pt;letter-spacing: .5px; line-height: 1.4;
+}
+.title2 {
+    text-align: center; font-weight: bold; font-size: 16pt;text-decoration: underline;
+    margin: 0 0 4px; line-height: 1.25;
+}
+.float-label {
+    position: absolute; top: 4mm; right: 14mm; font-size: 12pt; font-weight: bold;
+}
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+td, th {
+    border: 1px solid var(--line);padding: 3px 5px;vertical-align: middle;
+    font-size: 10pt;line-height: 1.5;
+}
+td.sec {font-weight: bold; font-size: 10pt; text-align: left; }
+
+/* ===== 字體：跟政府標準表格一樣用明體/宋體 ===== */
+body, .page, table, td, th, div, p, span, label, input, textarea, select, button, sup {
+    font-family: "PMingLiU","MingLiU","新細明體","細明體","SimSun","宋體","Songti TC","Noto Serif TC","AR PL UMing","Noto Serif CJK TC",serif;
+}
+.fillin-box {
+    border: 1px solid #000; background: #fff; font-family: inherit; font-size: 10pt;
+    padding: 1px 4px; height: 16px; vertical-align: middle; border-radius: 0;
+}
+/* 跟進工作詳情大框：列印時都要有框線 */
+.followup-box { border: 1px solid #000 !important; }
+.ul {
+    border-bottom: 1px solid #000;display: inline-block; height: 10px; vertical-align: -1px;
+}
+.ul.wide { min-width: 120px; }.ul.mid { min-width: 80px; }
+.opt { display: inline-block; white-space: normal; margin-right: 5px; }
+.opt:last-child { margin-right: 0; }
+.opt .box {
+    display: inline-block; width: 8px; height: 8px;border: 1px solid #000; margin-right: 2px; vertical-align: 0;
+}
+sup { font-size: 6.5pt; }
+.checkrow { line-height: 1.75; }
+.checkrow + .checkrow { margin-top: 1px; }
+.notes { margin-top: 3px; font-size: 9pt; line-height: 1.5; }
+.notes p { margin: 0; }.notes .sub { padding-left: 14px; }
+.bigbox {border: 1px solid #000;min-height: 62mm;}
+.bigbox-area {
+    width: 100%; box-sizing: border-box; display: block;
+    border-radius: 0; font-size: 10pt; font-family: inherit;
+    padding: 4px 6px; resize: none; background: #fff;
+    min-height: 62mm;
+}
+.fillin {
+    border: none;background: transparent;font-family: inherit;font-size: 10pt;color: #000;
+    padding: 0 2px;width: 72%;height: 15px;line-height: 1;vertical-align: bottom;
+}
+.fillin:focus { outline: 1px solid #aaa; background: #f7f7f7; }
+.fillin-plain {
+    border: none;background: transparent;font-family: inherit;font-size: 10pt;color: #000;
+    width: 70%;height: 15px;line-height: 1;vertical-align: bottom;
+}
+.fillin-plain:focus { outline: 1px solid #aaa; background: #f7f7f7; }
+.fillin-sm { width: 30px; }
+.ul-input {
+    border: none !important;
+    border-bottom: 1px solid #000 !important;
+    background: transparent !important;
+    border-radius: 0 !important;
+    padding: 0 3px 7px !important;
+    vertical-align: bottom;
+    height: 19px;
+}
+.ck {
+    -webkit-appearance: none; appearance: none;display: inline-block; width: 9px; height: 9px;
+    border: 1px solid #000; margin: 0 3px 0 0;vertical-align: 0; background: #fff; padding: 0; cursor: pointer;
+}
+.ck:checked { background: #000; }
+.decl-head { font-weight: bold; }
+.decl-note { font-size: 9pt; line-height: 1.6; text-align: justify; }
+.decl-body { font-size: 9.5pt; line-height: 1.75; text-align: justify; }
+.sig-line { margin: 6px 0; line-height: 1.6; }
+.staff-line { margin: 22px 0; font-size: 13pt; line-height: 1.5; }
+.receipt-title {
+    text-align: center; font-weight: bold; font-size: 14pt; margin-top: 8mm;
+}
+.receipt-sub {
+    text-align: center; font-weight: bold; font-size: 11pt; margin: 2px 0 7mm;
+}
+.query-line { font-size: 11pt; margin: 6mm 0 6mm; }
+.query-line .fillbox { border-bottom: 1px solid #000; padding: 0 3px; }
+.pdpa-title { font-weight: bold; font-size: 13pt; text-align: center; margin: 4mm 0 3mm; }
+.pdpa-body { font-size: 10pt; line-height: 1.85; }
+.pdpa-body p { margin: 3px 0; text-align: justify; }
+.pdpa-body .sec { font-weight: bold; margin-top: 7px; }
+.pdpa-body .sub { padding-left: 16px; }
+
+@media print {
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    html, body { background: #fff; padding: 0 !important; margin: 0 !important; }
+    #loginOverlay { display: none !important; }
+    #btnFloatTop { display: none !important; }
+    .main-wrap{display:none !important;}
+    .toolbar { display: none !important; }
+    .print-section { margin-top: 0 !important; }
+    .page {
+        width: 210mm; min-height: 285mm;
+        margin: 0; box-shadow: none;
+        padding: 4mm 10mm 4mm 8mm;
+    }
+    .page.break-before {
+        page-break-before: always;
+        break-before: page;
+    }
+    .page-first{
+        padding:10mm 10mm 4mm 8mm;
+    }
+    .page-second, .page-third {
+        padding-top: 8mm;
+    }
+    .srv-table td { padding-top: 3px; padding-bottom: 3px; }
+    .page-break{
+        display: none !important;
+    }
+    @page { size: A4 portrait; margin: 0; }
+
+    /* ===== 壓縮排版：確保第1頁內容收喺一頁，總共4頁 ===== */
+    .title1 { font-size: 12pt; line-height: 1.1; letter-spacing: 0; }
+    .title2 { font-size: 13.5pt; margin: 0 0 2px; line-height: 1.1; }
+
+    /* ===== 標題同文字字體唔好咁粗（列印時） ===== */
+    .title1, .title2, td.sec,
+    div[style*="font-weight:bold"], div[style*="font-weight: bold"],
+    p[style*="font-weight:bold"], p[style*="font-weight: bold"] {
+        font-weight: normal !important;
+    }
+    /* ===== 列印字體用明體（跟政府標準表格一樣） ===== */
+    body, .page, table, td, th, div, p, span, label, input, textarea, select, button, sup {
+        font-family: "PMingLiU","MingLiU","新細明體","細明體","SimSun","宋體","Songti TC","Noto Serif TC","AR PL UMing","Noto Serif CJK TC",serif !important;
+    }
+    table { margin-bottom: 0 !important; }
+    td, th { font-size: 8.5pt; padding: 1px 3px; line-height: 1.22; }
+    .noline .ul { border-bottom: 1px solid #000; }
+    .checkrow { line-height: 1.22; }
+    .checkrow + .checkrow { margin-top: 0; }
+    sup { font-size: 5pt; }
+    .notes { font-size: 7pt; line-height: 1.15; margin-top: 1px; }
+    .notes p { margin: 0; }
+    .notes .sub { padding-left: 8px; }
+    .fillin, .fillin-plain { font-size: 8.5pt; height: 15px; min-height: 0 !important; vertical-align: 1px; }
+    .ul-input { height: 19px; padding-bottom: 7px; }
+
+    /* ===== 填寫資料嘅線框列印時唔顯示（跟參考圖：淨表格手寫） ===== */
+    .fillin, .fillin-plain, .ul-input {
+        border: none !important;
+        background: transparent !important;
+    }
+    .fillin-box { border: 1px solid #000 !important; background: #fff !important; }
+    .bigbox, .bigbox-area { border: none !important; }
+    /* 聲明及同意（甲/乙項）＋關愛隊人員：列印時簽署/姓名/職位/日期要有底線 */
+    .sig-line .ul, .staff-line .ul { border-bottom: 1px solid #000 !important; }
+    .sig-line .ul-input, .staff-line .ul-input {
+        border: none !important;
+        border-bottom: 1px solid #000 !important;
+        background: transparent !important;
+    }
+    .ul.wide, .ul.mid { border-bottom: 1px solid #000; }
+    input, select, textarea { margin: 0 !important; }
+    .opt { margin-right: 3px; }
+    .opt .box { width: 7px; height: 7px; }
+    .ul { height: 7px; }
+    .bigbox { min-height: 58mm; }
+    .decl-body { font-size: 9pt; }
+    .decl-note { font-size: 8.5pt; }
+    .staff-line { margin: 15px 0; font-size: 12pt; }
+    .receipt-title { margin-top: 8mm; }
+    .receipt-sub { margin: 3px 0 8mm; }
+    .query-line { margin: 8mm 0 8mm; }
+    .pdpa-title { margin: 6mm 0 4mm; }
+    .pdpa-body { font-size: 10pt; line-height: 2.2; }
+    .pdpa-body p { margin: 9px 0; }
+    .pdpa-body .sec { margin-top: 18px; }
+
+    /* ===== 第1頁放寬：唔好下便空咁多（只影響第一頁） ===== */
+    .page-first .title1 { font-size: 14pt; line-height: 1.25; }
+    .page-first .title2 { font-size: 16pt; margin: 0 0 3px; line-height: 1.2; }
+    .page-first td, .page-first th { font-size: 10pt; padding: 3px 5px; line-height: 1.5; }
+    .page-first .checkrow { line-height: 1.5; }
+    .page-first .checkrow + .checkrow { margin-top: 2px; }
+    .page-first .notes { font-size: 8.5pt; line-height: 1.45; margin-top: 3px; }
+    .page-first .notes .sub { padding-left: 12px; }
+    .page-first .fillin, .page-first .fillin-plain { font-size: 9.5pt; height: 13px; }
+    .page-first .ul { height: 9px; }
+    .page-first sup { font-size: 6pt; }
+@media (max-width:800px){
+    .row,.row-address{grid-template-columns:1fr;gap:4px 0;}
+}
+@media screen and (max-width: 760px) {
+    body { background: #fff; }
+    .page { width: 100%; margin: 0; min-height: auto; padding: 10px; box-shadow: none; }
+    .page-first{padding:4mm 10px 10px 10px;}
+    .toolbar { position: static; }
+}
+</style>
+</head>
+<body>
+<div id="loginOverlay">
+  <div class="login-box">
+    <h3>🔐 離島社署個案綜合系統</h3>
+    <div class="login-sub">請輸入兩組存取密碼（各 8 位數字）</div>
+    <label>第一組存取密碼</label>
+    <input type="password" id="loginPw1" maxlength="8" inputmode="numeric" autocomplete="off">
+    <label>第二組驗證密碼</label>
+    <input type="password" id="loginPw2" maxlength="8" inputmode="numeric" autocomplete="off">
+    <label class="show-row"><input type="checkbox" id="loginShowPw"> 👁 顯示密碼（睇到數字）</label>
+    <button class="login-btn" id="loginBtn">🔓 登入</button>
+    <div id="loginErr"></div>
+  </div>
+</div>
+<div id="mainContentWrap">
+<div class="main-wrap" id="mainWrap">
+<div class="card card-top">
+    <div class="title-bar">📝 個案資料輸入</div>
+    <div class="btn-group">
+        <button class="btn-green btn-std" id="btnSave">💾 儲存個案</button>
+        <button class="btn-green btn-std" id="btnSaveEdit" disabled>✏️ 修改儲存</button>
+        <span id="editStatusBar"></span>
+        <button class="btn-green btn-std" id="btnReset">🔄 重設表單</button>
+        <span style="width:1px;height:24px;background:#ccc;margin:0 2px;"></span>
+        <button class="btn-blue btn-std" id="btnExportAllExcel">📊 匯出全部 Excel</button>
+        <button class="btn-teal btn-std" id="btnImportExcel">📥 匯入 Excel</button>
+        <button class="btn-purple btn-std" id="btnExportBackup">⬇ JSON 備份</button>
+        <button class="btn-teal btn-std" id="btnImportJson">📥 匯入 JSON</button>
+        <button class="btn-red btn-std" id="btnClearAll">🗑 清空全部紀錄</button>
+        <input type="file" id="fileImportExcel" accept=".xlsx,.xls" style="display:none;">
+        <input type="file" id="fileImportJson" accept=".json" style="display:none;">
+    </div>
+    <div class="row">
+        <label>編號</label>
+        <div class="inline-group">
+            <input type="password" id="inpId" class="w-xs" autocomplete="off">
+            <button class="btn-green btn-small" id="btnNewId">➕ 自動編號</button>
+        </div>
+    </div>
+    <div class="row"><label>姓名</label><input type="text" id="inpName" class="w-md"></div>
+    <div class="row">
+        <label>性別</label>
+        <select id="selGender" class="w-sm">
+            <option value=""></option>
+            <option value="男">男</option>
+            <option value="女">女</option>
+        </select>
+    </div>
+    <div class="row">
+        <label>出生日期</label>
+        <div class="inline-group">
+            <select id="selBirthYear" class="w-sm" style="width:110px;"><option value="">年</option></select>
+            <select id="selBirthMonth" class="w-xs" style="width:90px;"><option value="">月</option></select>
+            <select id="selBirthDay" class="w-xs" style="width:90px;"><option value="">日</option></select>
+            <span>｜</span>
+            <input type="text" id="inpBirthFull" class="w-md" placeholder="完整出生日期 YYYY‑MM‑DD" style="width:170px;">
+        </div>
+    </div>
+    <div class="row">
+        <label>年齡</label>
+        <div class="inline-group">
+            <input type="text" id="inpAge" class="w-sm" placeholder="可手動輸入" style="width:80px;">
+            <span id="ageHint" style="font-size:12px;color:#6b7280;">歲（選咗出生日期會自動計算；亦都可以直接手打）</span>
+        </div>
+    </div>
+    <div class="row"><label>聯絡電話號碼</label><input type="text" id="inpTel" class="w-md" maxlength="8" placeholder="8位數字（可以留空）" onblur="validateTel8(this)"><span id="telWarn" style="color:#c00;font-size:12px;margin-left:6px;"></span></div>
+    <div class="row"><label>電郵地址</label><input type="text" id="inpEmail" class="w-md" placeholder="（可以留空）"></div>
+    <div class="row-address">
+        <label>住址</label>
+        <div>
+            <div class="address-row">
+                <div>
+                    <label style="font-size:14px;">地區</label>
+                    <select id="selDistrict" class="w-md">
+                        <option value="">--請選擇地區--</option>
+                        <option value="大澳">大澳</option>
+                        <option value="水口">水口</option>
+                        <option value="貝澳">貝澳</option>
+                        <option value="昂坪">昂坪</option>
+                        <option value="東涌">東涌</option>
+                        <option value="長沙">長沙</option>
+                        <option value="梅窩">梅窩</option>
+                        <option value="塘福">塘福</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size:14px;">村莊/地址</label>
+                    <select id="selVillage" class="w-md"><option value="">--先揀地區--</option></select>
+                </div>
+            </div>
+            <input type="text" id="inpAddr" class="w-addr" placeholder="地址（下拉輔助自動組合，都可以自由手動輸入 / 修改）">
+        </div>
+    </div>
+    <div class="row">
+        <label>家庭類別<br><span style="font-size:11px;color:#6b7280;">（可以揀多過一項）</span></label>
+        <div class="ckgroup" id="famTypeGroup">
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="獨居長者">獨居長者</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="雙老家庭">雙老家庭</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="長者戶">長者戶</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="居於劏房的住戶">居於劏房的住戶</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="低收入住戶">低收入住戶</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="少數族裔人士">少數族裔人士</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="新來港住戶">新來港住戶</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="持雙程通行證來港照顧家人的人士">持雙程通行證來港照顧家人的人士</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="肢體傷殘人士">肢體傷殘人士</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="智障人士">智障人士</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="有精神健康需要人士">有精神健康需要人士</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="長期病患者">長期病患者</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="無酬主要照顧者">無酬主要照顧者</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="單親家長">單親家長</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="有特殊學習需要兒童">有特殊學習需要兒童</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="漁民戶">漁民戶</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="外籍家庭傭工">外籍家庭傭工</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="普通家庭">普通家庭</label>
+            <label class="ckitem"><input type="checkbox" name="famTypeCk" value="其他">其他</label>
+        </div>
+    </div>
+    <div class="row">
+        <label>特殊支援設備<br><span style="font-size:11px;color:#6b7280;">（可以揀多過一項）</span></label>
+        <div class="ckgroup" id="devGroup">
+            <label class="ckitem"><input type="checkbox" name="devCk" value="維持生命的電動醫療設備">維持生命的電動醫療設備</label>
+            <label class="ckitem"><input type="checkbox" name="devCk" value="緊急召援系統(例如：平安鐘)">緊急召援系統(例如：平安鐘)</label>
+            <label class="ckitem"><input type="checkbox" name="devCk" value="嚴重聽障人士的家居支援設備">嚴重聽障人士的家居支援設備</label>
+            <label class="ckitem"><input type="checkbox" name="devCk" value="需活動輔助器具">需活動輔助器具</label>
+            <label class="ckitem"><input type="checkbox" name="devCk" value="其他">其他</label>
+        </div>
+    </div>
+    <div class="row">
+        <label>工人</label>
+        <select id="selWorker" class="w-sm">
+            <option value=""></option>
+            <option value="有">有</option>
+            <option value="冇">冇</option>
+        </select>
+    </div>
+    <div class="row">
+        <label>平安鐘</label>
+        <select id="selBell" class="w-sm">
+            <option value=""></option>
+            <option value="有">有</option>
+            <option value="冇">冇</option>
+        </select>
+    </div>
+    <div class="row"><label>家屬姓名</label><input type="text" id="inpFamilyName" class="w-md"></div>
+    <div class="row"><label>家屬電話</label><input type="text" id="inpFamilyTel" class="w-md"></div>
+    <div class="row">
+        <label>關係</label>
+        <select id="selRel" class="w-md">
+            <option value=""></option>
+            <option value="夫妻">夫妻</option>
+            <option value="兄弟">兄弟</option>
+            <option value="姊妹">姊妹</option>
+            <option value="兄妹">兄妹</option>
+            <option value="姊弟">姊弟</option>
+            <option value="父子">父子</option>
+            <option value="父女">父女</option>
+            <option value="母子">母子</option>
+            <option value="母女">母女</option>
+        </select>
+    </div>
+    <div class="row">
+        <label>政府福利</label>
+        <select id="selWelfare" class="w-md">
+            <option value=""></option>
+            <option value="長者生活津貼">長者生活津貼</option>
+            <option value="生果金">生果金</option>
+            <option value="綜援">綜援</option>
+            <option value="其他">其他</option>
+        </select>
+    </div>
+    <div class="row"><label>居住人數</label><input type="text" id="inpLiveNum" class="w-sm"></div>
+    <div class="row"><label>備注</label><input type="text" id="inpRemark" class="w-lg"></div>
+    <div class="row">
+        <label>香港永久性居民</label>
+        <select id="selResident" class="w-sm">
+            <option value=""></option>
+            <option value="是">是</option>
+            <option value="否">否</option>
+        </select>
+    </div>
+    <div class="row"><label>職業</label><input type="text" id="inpJob" class="w-md"></div>
+    <div class="row"><label>社署：I‑425</label><input type="text" id="inpI425" class="w-md"></div>
+    <div class="row"><label>個案編號</label><input type="text" id="inpCaseNo" class="w-md"></div>
+    <div class="row">
+        <label>要求的服務<br><span style="font-size:11px;color:#6b7280;">（可以揀多過一項）</span></label>
+        <div class="ckgroup" id="srvGroup">
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="社會福利署的支援服務">社會福利署的支援服務</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="兒童暫托服務">兒童暫托服務</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="長者/病人陪診服務">長者/病人陪診服務</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="照顧者支援">照顧者支援</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="情緒輔導服務">情緒輔導服務</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="精神健康服務">精神健康服務</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="申請公共房屋">申請公共房屋</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="大廈管理事宜">大廈管理事宜</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="改善*環境衞生/消防隱患/治安情況">改善*環境衞生/消防隱患/治安情況</label>
+            <label class="ckitem"><input type="checkbox" name="srvCk" value="其他">其他</label>
+        </div>
+    </div>
+    <div class="row"><label>服務要求詳情</label><input type="text" id="inpServiceNeed" class="w-lg"></div>
+    <div class="row"><label>服務日期</label><input type="date" id="inpServiceDate" class="w-md"></div>
+</div>
+<div class="card card-left">
+    <div class="title-bar">📋 個案資料列表</div>
+    <div class="batch-bar">
+        <button class="btn-orange btn-small" id="btnHideAllOld">🙈 隱藏全部</button>
+        <button class="btn-orange btn-small" id="btnShowAllOld">👁 顯示全部</button>
+        <button class="btn-red btn-small" id="btnClearOldImport">🗑 清空列表</button>
+        <span style="width:1px;height:24px;background:#ccc;"></span>
+        <button class="btn-blue btn-small" id="btnSelectAll">☑ 全部勾選</button>
+        <span class="sel-count" id="selCount"></span>
+        <span style="width:1px;height:24px;background:#ccc;"></span>
+        <div class="search-box">
+            <span style="font-size:13px;color:#555;">🔍</span>
+            <input type="text" id="searchKeyword" placeholder="查姓名／電話／地址">
+        </div>
+        <span style="width:1px;height:24px;background:#ccc;"></span>
+        <button class="btn-blue btn-small" onclick="scrollListTo('top')" title="快速去返列表最上">⬆ 跳頂</button>
+        <button class="btn-blue btn-small" onclick="scrollListTo('bottom')" title="快速去到底下最新個案">⬇ 跳底</button>
+        <span style="width:1px;height:24px;background:#ccc;"></span>
+        <input type="date" id="batchDate" class="w-md" title="揀日期">
+        <button class="btn-blue btn-small" id="btnBatchDate">📅 加到勾選</button>
+        <button class="btn-blue btn-small" id="btnExportSel">📥 匯出勾選 Excel</button>
+    </div>
+    <div id="oldImportListBox"></div>
+</div>
+</div>
+
+<div class="print-section">
+<div class="toolbar">
+  <span class="brand">📄 服務要求表格 列印版（離島區T01大嶼山小區「關愛隊」）</span>
+  <select id="caseSelect">
+    <option value="">— 合併列印：揀個案 —</option>
+  </select>
+  <button onclick="applySelectedCase()">🔄載入選取個案</button>
+  <button onclick="clearFilled()">🗑 清空已填</button>
+  <button onclick="printAllCases()">🖨️ 列印全部</button>
+  <button onclick="printSelected()">🖨️ 列印已勾選</button>
+  <button onclick="window.print()">🖨️ 列印／匯出 PDF</button>
+</div>
+
+<!-- ========== 第1頁（page‑first：頂部留白縮細，標題向上移） ========== -->
+<div class="page page-first">
+  <div class="float-label">附件3</div>
+  <div class="title1">離島區T01大嶼山小區「地區服務及關愛隊伍」(「關愛隊」)</div>
+  <div class="title2">服務要求表格</div>
+  <table style="margin-bottom:2px;">
+    <colgroup>
+      <col style="width:47.9%;"><col style="width:52.1%;">
+    </colgroup>
+    <tr>
+      <td>個案編號︰<input type="text" class="fillin-plain" data-f="caseNo"></td>
+      <td>日期︰<input type="text" class="fillin-plain" data-f="date"></td>
+    </tr>
+  </table>
+  <div style="font-weight:bold; font-size:10pt; margin:4px 0 3px;">第一部分︰服務要求者的個人資料 <span style="font-size:8pt;">(*為必需填寫項目，請提供所需個人資料，否則或將無法處理你的服務要求)</span></div>
+  <table>
+    <colgroup>
+      <col style="width:33.3%;"><col style="width:14.6%;"><col style="width:5.5%;"><col style="width:46.6%;">
+    </colgroup>
+    <tr><td class="sec" colspan="4">個人聯絡資料</td></tr>
+    <tr>
+      <td colspan="2">*姓名 : <input type="text" class="fillin" data-f="name"></td>
+      <td colspan="2">*聯絡電話︰<input type="text" class="fillin" data-f="tel"></td>
+    </tr>
+    <tr>
+      <td colspan="2">*住址︰ <input type="text" class="fillin" data-f="addr"></td>
+      <td colspan="2">電郵地址︰<input type="text" class="fillin" data-f="email"></td>
+    </tr>
+    <tr><td class="sec" colspan="4">其他個人資料</td></tr>
+    <tr>
+      <td colspan="2">性別︰<input type="text" class="fillin" data-f="gender"></td>
+      <td colspan="2">出生年份︰<input type="text" class="fillin" data-f="birthYear"></td>
+    </tr>
+    <tr>
+      <td colspan="2">香港永久性居民：<span class="opt"><input type="checkbox" class="ck" data-g="resident" data-ck="是">是</span><span class="opt"><input type="checkbox" class="ck" data-g="resident" data-ck="否">否</span></td>
+      <td colspan="2">職業︰<input type="text" class="fillin" data-f="job"></td>
+    </tr>
+    <tr>
+      <td colspan="4">
+        <div style="font-weight:bold;">*本人/本住戶是 (可選擇多於一項)︰</div>
+        <div class="checkrow">
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="獨居長者">獨居長者<sup>註一</sup></span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="雙老家庭">雙老家庭</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="長者戶">長者戶<sup>註二</sup></span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="居於劏房的住戶">居於劏房的住戶</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="低收入住戶">低收入住戶<sup>註三</sup></span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="少數族裔人士">少數族裔人士<sup>註四</sup></span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="新來港住戶">新來港住戶<sup>註五</sup></span>
+        </div>
+        <div class="checkrow">
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="持雙程通行證來港照顧家人的人士">持雙程通行證來港照顧家人的人士</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="肢體傷殘人士">肢體傷殘人士</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="智障人士">智障人士</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="有精神健康需要人士">有精神健康需要人士</span>
+        </div>
+        <div class="checkrow">
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="長期病患者">長期病患者</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="無酬主要照顧者">無酬主要照顧者<sup>註六</sup></span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="單親家長">單親家長</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="有特殊學習需要兒童">有特殊學習需要兒童</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="漁民戶">漁民戶<sup>註七</sup></span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="外籍家庭傭工">外籍家庭傭工</span>
+        </div>
+        <div class="checkrow">
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="普通家庭">普通家庭</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="其他">其他(請註明：<span class="ul wide"></span>)</span>
+        </div>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="4">
+        <div style="font-weight:bold;">本人/本住戶有特殊支援設備的需要 (可選擇多於一項)︰</div>
+        <div class="checkrow">
+          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="維持生命的電動醫療設備">維持生命的電動醫療設備(請註明：<span class="ul mid"></span>)</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="緊急召援系統(例如：平安鐘)">緊急召援系統(例如：平安鐘)</span>
+        </div>
+        <div class="checkrow">
+          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="嚴重聽障人士的家居支援設備">嚴重聽障人士的家居支援設備</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="需活動輔助器具">需活動輔助器具(請註明：<span class="ul mid"></span>)</span>
+        </div>
+        <div class="checkrow">
+          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="其他">其他(請註明：<span class="ul wide"></span>)</span>
+        </div>
+      </td>
+    </tr>
+    <tr><td class="sec" colspan="4">同住成員的個人資料</td></tr>
+    <tr>
+      <td>姓名︰<input type="text" class="fillin" data-f="famName"></td>
+      <td colspan="2">關係：<input type="text" class="fillin" data-f="famRel"></td>
+      <td>聯絡電話︰<input type="text" class="fillin" data-f="famTel"></td>
+    </tr>
+    <tr>
+      <td>姓名︰<input type="text" class="fillin"></td>
+      <td colspan="2">關係：<input type="text" class="fillin"></td>
+      <td>聯絡電話︰<input type="text" class="fillin"></td>
+    </tr>
+    <tr><td class="sec" colspan="4">非同住照顧者的個人資料</td></tr>
+    <tr>
+      <td>姓名︰<input type="text" class="fillin"></td>
+      <td colspan="2">關係：<input type="text" class="fillin"></td>
+      <td>聯絡電話︰<input type="text" class="fillin"></td>
+    </tr>
+    <tr>
+      <td>姓名︰<input type="text" class="fillin"></td>
+      <td colspan="2">關係：<input type="text" class="fillin"></td>
+      <td>聯絡電話︰<input type="text" class="fillin"></td>
+    </tr>
+  </table>
+  <div class="notes">
+    <p>註一：年滿65歲或以上嘅獨居人士</p>
+    <p>註二：部分或者全部成員達65歲或者以上嘅住戶</p>
+    <p>註三：現正受惠於下面任何一項援助計劃嘅住戶 -</p>
+    <p class="sub">i. 綜合社會保障援助計劃</p>
+    <p class="sub">ii. 長者生活津貼或者高齡津貼</p>
+    <p class="sub">iii. 在職家庭津貼計劃</p>
+    <p class="sub">iv. 學校全額書簿津貼計劃</p>
+    <p class="sub">v. 幼稚園同幼兒中心學費減免計劃</p>
+    <p>註四：非華裔人士，同時係喺本港永久居留嘅香港居民，特別係嚟自印度、尼泊爾同巴基斯坦等南亞國家嘅居民</p>
+    <p>註五：住戶入面任何一位或者以上成員同時符合下面三項，該戶就屬於新來港住戶 -</p>
+    <p class="sub">i. 嚟港唔夠7年</p>
+    <p class="sub">ii. 嚟港目的係定居嘅人士</p>
+    <p class="sub">iii. 唔係喺獲入境處簽發有關簽證或者進入許可之前，入境處已經信納為有足夠經濟能力維持自己喺港生活嘅人士，例如外傭、「優秀人才入境計劃」嚟港嘅人士同佢哋嘅受養人等</p>
+    <p>註六：指需要無酬照顧親人/其他人士(例如長期病患、殘疾或者長者等)，並且喺一個星期入面照顧佢哋最長時間嘅人士</p>
+    <p>註七：住戶入面任何一位或者以上成員係漁民就屬於漁民戶</p>
+  </div>
+</div>
+<div class="page-break"></div>
+
+<!-- ========== 第2頁 ========== -->
+<div class="page break-before page-second">
+  <div style="font-weight:bold; font-size:11pt; margin-bottom:5px;">第二部分︰要求嘅服務(可以揀多過一項)</div>
+  <table class="srv-table" style="margin-bottom:2px;">
+    <colgroup>
+      <col style="width:32.4%;"><col style="width:32.4%;"><col style="width:35.2%;">
+    </colgroup>
+    <tr>
+      <td><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="社會福利署的支援服務">社會福利署嘅支援服務</span></td>
+      <td><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="兒童暫托服務">兒童暫托服務</span></td>
+      <td><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="長者/病人陪診服務">長者/病人陪診服務</span></td>
+    </tr>
+    <tr>
+      <td><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="照顧者支援">照顧者支援</span></td>
+      <td><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="情緒輔導服務">情緒輔導服務</span></td>
+      <td><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="精神健康服務">精神健康服務</span></td>
+    </tr>
+    <tr>
+      <td><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="申請公共房屋">申請公共房屋</span></td>
+      <td><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="大廈管理事宜">大廈管理事宜</span></td>
+      <td><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="改善*環境衞生/消防隱患/治安情況">改善*環境衞生/消防隱患/治安情況</span></td>
+    </tr>
+    <tr>
+      <td colspan="3"><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="其他">其他(請註明)：</span><span class="ul wide"></span></td>
+    </tr>
+    <tr>
+      <td colspan="3" style="padding:0;">
+        <div style="padding:2px 6px;">服務要求詳情︰</div>
+        <textarea class="bigbox bigbox-area" data-f="serviceNeed" style="min-height:105mm;"></textarea>
+      </td>
+    </tr>
+  </table>
+  <div style="font-weight:bold; font-size:11pt; margin:8px 0 5px;">第三部分︰聲明及同意（請填寫下面（甲）項 或者（乙）項）</div>
+  <table>
+    <colgroup>
+      <col style="width:45.3%;"><col style="width:5.5%;"><col style="width:49.3%;">
+    </colgroup>
+    <tr>
+      <td colspan="3" class="decl-note">注意：此部分（甲）項需要由服務要求者填寫同簽署。如果服務要求者唔方便簽署，「關愛隊」人員可以填寫同簽署（乙）項，確認服務要求者已經知悉附頁「收集個人資料聲明」嘅內容，並且同意民政事務總署(民政總署)同「關愛隊」可以使用以及/或者轉介佢嘅個人資料。</td>
+    </tr>
+    <tr>
+      <td class="decl-head">（甲）服務要求者自行填寫同簽署：</td>
+      <td></td>
+      <td class="decl-head">（乙）「關愛隊」人員確認同簽署：</td>
+    </tr>
+    <tr>
+      <td>
+        <div class="decl-body"><span class="opt"><input type="checkbox" class="ck">本人已經細閱附頁嘅「收集個人資料聲明」，並且同意民政總署同「關愛隊」可以使用本人喺呢個表格上面提供嘅個人資料持續跟進我嘅服務要求，以及用於同「關愛隊」職能同活動有關嘅合法目的，並且可以為咗上面嘅目的而將本人喺呢個表格上面提供嘅個人資料轉交俾政府其他部門、局同有關人士同團體/機構。</span></div>
+      </td>
+      <td></td>
+      <td>
+        <div class="decl-body"><span class="opt"><input type="checkbox" class="ck">本人已經向服務要求者簡介附頁嘅「收集個人資料聲明」，並且已經獲得同意民政總署同「關愛隊」可以使用喺呢個表格上面提供嘅個人資料持續跟進佢嘅服務要求，以及用於同「關愛隊」職能同活動有關嘅合法目的，並且可以為咗上面嘅目的而將喺呢個表格上面提供嘅個人資料轉交俾政府其他部門、局同有關人士同團體/機構。</span></div>
+      </td>
+    </tr>
+    <tr>
+      <td style="height:66mm;">
+        <div class="decl-body"><span class="opt"><input type="checkbox" class="ck">本人同意民政總署同「關愛隊」可以使用本人喺呢個表格上面提供嘅聯絡方式向我發放(唔理係任何形式)有關政府服務或者地區事宜嘅資訊。</span></div>
+        <div class="sig-line">簽署︰<span class="ul" style="min-width:150px;"></span></div>
+        <div class="sig-line">姓名︰<span class="ul" style="min-width:150px;" data-f="name"></span></div>
+        <div class="sig-line">日期︰<span class="ul" style="min-width:150px;" data-f="date"></span></div>
+      </td>
+      <td style="height:66mm;"></td>
+      <td style="height:66mm;">
+        <div class="decl-body"><span class="opt"><input type="checkbox" class="ck">服務要求者同意民政總署同「關愛隊」可以使用喺呢個表格上面提供嘅聯絡方式向佢發放(唔理係任何形式)有關政府服務或者地區事宜嘅資訊。</span></div>
+        <div class="sig-line">簽署︰<span class="ul" style="min-width:150px;"></span></div>
+        <div class="sig-line">姓名︰<input type="text" class="fillin-plain ul-input" style="width:150px;"></div>
+        <div class="sig-line">日期︰<input type="text" class="fillin-plain ul-input" data-f="date" style="width:150px;"></div>
+      </td>
+    </tr>
+  </table>
+</div>
+<div class="page-break"></div>
+
+<!-- ========== 第3頁 ========== -->
+<div class="page break-before page-third">
+  <div style="font-weight:bold; font-size:11pt; margin:0 0 8px;">第四部分：跟進工作(由「關愛隊」人員填寫)</div>
+  <p style="margin:0 0 8px;">要求的服務須轉介予相關政府部門或團體/機構跟進。</p>
+  <table>
+    <colgroup>
+      <col style="width:100%;">
+    </colgroup>
+    <tr>
+      <td>
+        <div style="padding:2px 6px; font-weight:bold;">跟進工作詳情：</div>
+        <div style="padding:0 6px 2px;">
+          <div style="margin-bottom:7px;">居住人數:<input type="text" class="fillin fillin-sm" data-f="liveNum">個</div>
+          <div style="margin-bottom:7px;">工人：<span class="opt"><input type="checkbox" class="ck" data-g="worker" data-ck="有">有</span><span class="opt"><input type="checkbox" class="ck" data-g="worker" data-ck="冇">冇</span>
+            &nbsp;&nbsp;&nbsp;
+            平安鐘：<span class="opt"><input type="checkbox" class="ck" data-g="bell" data-ck="有">有</span><span class="opt"><input type="checkbox" class="ck" data-g="bell" data-ck="冇">冇</span></div>
+          <div><span class="opt"><input type="checkbox" class="ck" data-g="welfare" data-ck="長者生活津貼">長者生活津貼</span><span class="opt"><input type="checkbox" class="ck" data-g="welfare" data-ck="生果金">生果金</span><span class="opt"><input type="checkbox" class="ck" data-g="welfare" data-ck="綜援">綜援</span><span class="opt"><input type="checkbox" class="ck" data-g="welfare" data-ck="其他">其他</span></div>
+        </div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:0;">
+        <textarea class="bigbox bigbox-area followup-box" style="min-height:55mm;"></textarea>
+      </td>
+    </tr>
+  </table>
+  <div style="font-weight:bold; font-size:12pt; margin:22px 0 0; padding-bottom:12px;">處理個案的「關愛隊」人員</div>
+  <div style="font-size:13pt;">
+    <div class="staff-line">簽署︰<span class="ul" style="min-width:180px;"></span></div>
+    <div class="staff-line">姓名︰<input type="text" class="fillin-plain ul-input" style="width:180px;"></div>
+    <div class="staff-line">職位︰<input type="text" class="fillin-plain ul-input" style="width:180px;"></div>
+    <div class="staff-line">日期︰<input type="text" class="fillin-plain ul-input" data-f="date" style="width:180px;"></div>
+  </div>
+</div>
+
+<!-- ========== 第4頁（最後一頁！唔加page‑break，唔會多出空白第5頁） ========== -->
+<div class="page break-before">
+  <div class="float-label">附頁</div>
+  <div class="receipt-title">服務要求者回條</div>
+  <div class="receipt-sub">(呢一頁需要交俾服務要求者保存)</div>
+  <p class="query-line">有關呢一次服務要求嘅查詢，請致電<span class="fillbox">84948245</span>同<span class="fillbox">離島區T01大嶼山小區「關愛隊」</span>聯絡。</p>
+  <div class="pdpa-title">收集個人資料聲明</div>
+  <div class="pdpa-body">
+    <p>除咗選擇性填寫項目，你需要喺本表格入面提供個人資料，否則「關愛隊」小隊或者將無法處理你嘅服務要求。你喺本表格上面提供嘅個人資料將會按照《個人資料(私隱)條例》(香港法例第486章)嘅規定處理。</p>
+    <p class="sec">使用個人資料嘅目的</p>
+    <p>1. 「地區服務及關愛隊伍」(「關愛隊」)會推展關愛活動(例如探訪有需要人士)；協助處理突發同緊急事故；協助政府傳遞資訊，並向政府報告市民嘅意見；以及推行包括政策宣傳同教育或者大型地區節慶活動等嘅其他服務。你喺本表格上面提供嘅個人資料，將會由民政事務總署(民政總署)同「關愛隊」小隊(包括所有接續承辦小區「關愛隊」服務嘅團體)保存。民政總署(包括地區民政事務處)以及/或者「關愛隊」小隊可以使用有關個人資料，並且可以向政府其他部門、局同有關人士同團體/機構披露有關個人資料，作下面嘅用途：</p>
+    <p class="sub">(a) 跟進你嘅服務要求，並且持續跟進你嘅服務需要；</p>
+    <p class="sub">(b) 履行「關愛隊」職能，提供關愛服務/活動；</p>
+    <p class="sub">(c) 推展社區建設工作；</p>
+    <p class="sub">(d) 方便政府同「關愛隊」小隊同你聯絡或者向你提供資訊；以及/或者</p>
+    <p class="sub">(e) 同上面嘅目的直接有關、由上面嘅目的引起或者附帶嘅所有其他用途。</p>
+    <p>除非你明示同意或者香港特別行政區嘅法律容許，否則你喺本表格上面提供嘅個人資料唔會用喺上面目的以外嘅用途。</p>
+    <p class="sec">資料轉移對象類別</p>
+    <p>2. 你所提供嘅個人資料可以為咗上文第1段所述嘅目的而向相關「關愛隊」、政府其他部門、局同有關人士同團體/機構(包括往後承辦「關愛隊」嘅團體/機構)披露、使用同為咗上文第1段所述嘅目的進一步披露有關嘅個人資料。</p>
+    <p class="sec">查閱同改正個人資料</p>
+    <p>3. 根據《個人資料(私隱)條例》(香港法例第486章)第18同22條同附表1第6原則，你同獲你書面授權嘅人士有權要求查閱同改正你喺本表格上面提供嘅個人資料，包括索取本表格嘅副本。</p>
+    <p class="sec">查詢</p>
+    <p>4. 如果對使用本表格收集嘅個人資料有任何查詢(包括查閱同改正資料)，請聯絡<span class="fillbox">離島區T01大嶼山小區「關愛隊」小隊</span>，電話：<span class="fillbox">84948245</span>。</p>
+  </div>
+</div>
+</div>
+
+</div>
+
+<div id="printAllContainer"></div>
+
+<script>
+/* ================= 保安模組（密碼雜湊＋資料加密＋自動鎖定） ================= */
+const LOCK_KEY = "islandCaseLock";
+const IDLE_MS = 5 * 60 * 1000;           // 閒置 5 分鐘自動鎖定
+let _aesKey = null;                       // 登入後先導出嘅加密鎖匙
+let _idleTimer = null;
+
+/* SHA-256 純 JS 實現（Web Crypto 唔可用時嘅後備） */
+function sha256Fallback(ascii){
+    function rightRotate(v, a){ return (v>>>a) | (v<<(32-a)); }
+    var mathPow = Math.pow, maxWord = mathPow(2, 32);
+    var result = '', words = [], asciiBitLength = ascii.length*8;
+    var hash = sha256Fallback.h = sha256Fallback.h || [];
+    var k = sha256Fallback.k = sha256Fallback.k || [];
+    var primeCounter = k.length, isComposite = {};
+    for(var candidate=2; primeCounter<64; candidate++){
+        if(!isComposite[candidate]){
+            for(var i=0; i<313; i+=candidate) isComposite[i]=candidate;
+            hash[primeCounter] = (mathPow(candidate, .5)*maxWord)|0;
+            k[primeCounter++] = (mathPow(candidate, 1/3)*maxWord)|0;
+        }
+    }
+    ascii += '\x80';
+    while(ascii.length%64 - 56) ascii += '\x00';
+    for(var i=0; i<ascii.length; i++){
+        var j = ascii.charCodeAt(i);
+        if(j>>8) return '';
+        words[i>>2] |= j << ((3-i)%4)*8;
+    }
+    words[words.length] = (asciiBitLength/maxWord)|0;
+    words[words.length] = asciiBitLength;
+    for(var j=0; j<words.length;){
+        var w = words.slice(j, j+=16);
+        var oldHash = hash;
+        hash = hash.slice(0,8);
+        for(var i=0; i<64; i++){
+            var w15 = w[i-15], w2 = w[i-2];
+            var a = hash[0], e = hash[4];
+            var temp1 = hash[7]
+                + (rightRotate(e,6) ^ rightRotate(e,11) ^ rightRotate(e,25))
+                + ((e&hash[5]) ^ ((~e)&hash[6]))
+                + k[i]
+                + (w[i] = (i<16) ? w[i] : (
+                    w[i-16]
+                    + (rightRotate(w15,7) ^ rightRotate(w15,18) ^ (w15>>>3))
+                    + w[i-7]
+                    + (rightRotate(w2,17) ^ rightRotate(w2,19) ^ (w2>>>10))
+                )|0);
+            var temp2 = (rightRotate(a,2) ^ rightRotate(a,13) ^ rightRotate(a,22))
+                + ((a&hash[1]) ^ (a&hash[2]) ^ (hash[1]&hash[2]));
+            hash = [(temp1+temp2)|0].concat(hash);
+            hash[4] = (hash[4]+temp1)|0;
+        }
+        for(i=0; i<8; i++) hash[i] = (hash[i]+oldHash[i])|0;
+    }
+    for(i=0; i<8; i++){
+        for(j=3; j+1; j--){
+            var b = (hash[i]>>(j*8))&255;
+            result += ((b<16)?'0':'') + b.toString(16);
+        }
+    }
+    return result;
+}
+async function sha256Hex(str){
+    try{
+        if(window.crypto && crypto.subtle){
+            const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+            return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
+        }
+    }catch(e){}
+    return sha256Fallback(str);
+}
+
+/* 固定鹽（寫死喺 code，配合密碼導出同一把鎖匙） */
+const SALT_BYTES = [0x1c,0x4a,0x7f,0x02,0xd3,0x99,0x65,0x0b,0x8e,0x21,0xfa,0x35,0x55,0xc8,0x90,0x3d];
+async function deriveKey(passphrase){
+    try{
+        if(!(window.crypto && crypto.subtle)) return null;
+        const km = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+        return crypto.subtle.deriveKey(
+            {name:"PBKDF2", salt: new Uint8Array(SALT_BYTES), iterations: 200000, hash:"SHA-256"},
+            km,
+            {name:"AES-GCM", length:256},
+            false, ["encrypt","decrypt"]
+        );
+    }catch(e){ return null; }
+}
+function b64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function unb64(s){ return Uint8Array.from(atob(s), c=>c.charCodeAt(0)); }
+async function encryptData(obj, key){
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, key, new TextEncoder().encode(JSON.stringify(obj)));
+    return {v:2, iv:b64(iv), ct:b64(ct)};
+}
+async function decryptData(blob, key){
+    const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:unb64(blob.iv)}, key, unb64(blob.ct));
+    return JSON.parse(new TextDecoder().decode(pt));
+}
+
+/* 錯誤鎖定（錯 5 次鎖 10 分鐘） */
+function getLockState(){
+    try{ return JSON.parse(localStorage.getItem(LOCK_KEY) || "null"); }catch(e){ return null; }
+}
+
+/* 閒置自動鎖定 */
+function startIdleTimer(){
+    const reset = function(){
+        clearTimeout(_idleTimer);
+        _idleTimer = setTimeout(lockNow, IDLE_MS);
+    };
+    ["mousemove","mousedown","keydown","touchstart","scroll"].forEach(ev => {
+        document.addEventListener(ev, reset, {passive:true});
+    });
+    reset();
+}
+function lockNow(){
+    clearTimeout(_idleTimer);
+    document.getElementById("mainContentWrap").style.display = "none";
+    const ov = document.getElementById("loginOverlay");
+    ov.style.display = "flex";
+    const p1 = document.getElementById("loginPw1");
+    const p2 = document.getElementById("loginPw2");
+    p1.value = ""; p2.value = "";
+    p1.type = "password"; p2.type = "password";
+    const sh = document.getElementById("loginShowPw");
+    if(sh) sh.checked = false;
+    document.getElementById("loginErr").textContent = "🔒 已自動鎖定，請重新登入";
+    _aesKey = null;
+    dataList = []; oldImportList = [];
+    editingId = null;
+}
+
+const STORAGE_KEY = "islandCaseData";
+const STORAGE_OLD_IMPORT = "oldImportList";
+let dataList = [];
+let oldImportList = [];
+let editingId = null;
+let ageManuallySet = false;
+
+const VILLAGE_MAP = {
+    "大澳": ["二涌棚","二澳","三涌棚","上羗山村","上羗山鹿湖村","下羗山村","大浪灣","大涌棚","大澳吉慶街棚","大澳道","天利苑","太平街","太平街二涌棚","太平街三涌棚","太平街沙仔面棚","太平街後座","太平街新沙棚","北山村","半路棚","永安街","石仔埗","石仔埗大澳花園","石仔埗半路棚","石仔埗生釣棚","石仔埗沙角咀","石仔埗街","石仔埗街A段","吉慶前街","吉慶後街","吉慶後街棚","吉慶街","吉慶街後","坑尾村","沙仔面","沙仔面棚","南涌村","南涌新村","梁屋村","深石村","深屈村","散頭村","番鬼塘村","街市街","街市街大涌棚","新沙棚","新基棚","新基街","大澳道","橫坑村","龍田邨天成樓","龍田邨天財樓","龍田邨天喜樓","龍田邨天富樓","龍田邨天貴樓","龍田邨天寧樓","龍田邨天福樓","龍田邨天德樓","龍田邨龍田商場","龍軒苑A座","龍軒苑B座","龍軒苑永軒閣","龍軒苑永軒閣地下","龍軒苑暢軒閣","龍軒苑暢軒閣地下","龍軒苑錦軒閣","龍軒苑錦軒閣地下","龍軒苑鱗軒閣","龍軒苑麟軒閣"],
+    "水口": ["水口村"],
+    "貝澳": ["老圍村","新圍村","咸田村","咸田新村","咸田舊村","拾塱涌口","拾塱舊村","富瑤小築","羅屋村"],
+    "昂坪": ["昂坪村","妙香林","法嚴精舍","青蓮苑","致志蓮若","悟覺","般若苑","常德林","菩提閣","輸陀園","療養院","叢苑","寶蓮禪寺","覺慈淨苑"],
+    "東涌": ["上嶺皮村","下嶺皮村","石門甲村","石榴埔村","赤鱲角村","馬灣村","馬灣涌村","馬灣新村","莫家村","散頭村","黃泥屋","黃家圍村","䃟頭村","壩尾村"],
+    "長沙": ["長沙下村"],
+    "梅窩": ["大地塘村","大地塘村新龍圍","大地塘南邊圍","梅窩大廈","梅窩中心","牛牯灣","白銀鄉村","石榴園","來來老人院","卓濤軒第","東灣頭","東灣頭路","虎崗山","南邊圍","家樂閣","海景大廈","涌口村","涌口街","涌口道","荔枝園村","梅窩大廈","鹿地塘下村塱","鹿地塘村","麻布村","麻埔村","菜園村","鄉事會路","圓卓村","新龍圍","稔埔村","窩田村","銀河苑銀旭閣","銀河苑銀朗閣","銀河灣畔","銀景中心","銀運路","銀蔚苑","銀輝大廈","銀寶大廈","銀寶中心","銀礦中心","銀礦灣路","銀灣邨銀日樓A座","銀灣邨銀日樓B座","銀灣邨銀月樓","銀灣邨銀星樓","銀灣邨銀虹樓","橫塘村","龍尾村","嶺咀頭村","舊村"],
+    "塘福": ["塘福村"]
+};
+
+function cleanSpaceStr(s){ return String(s||"").replace(/\s+/g," ").trim(); }
+function getCheckedList(name){
+    return [...document.querySelectorAll("input[name="+name+"]:checked")].map(c=>c.value).join("、");
+}
+function setCheckedList(name, str){
+    const vals = String(str||"").split(/[、,，]/).map(s=>s.trim()).filter(Boolean);
+    document.querySelectorAll("input[name="+name+"]").forEach(c=>{ c.checked = vals.includes(c.value); });
+}
+function getFormData(){
+    const get = id => document.getElementById(id).value.trim();
+    const birthFull = get("inpBirthFull");
+    let age = "";
+    if(ageManuallySet && get("inpAge")){
+        age = get("inpAge");
+    }else{
+        age = calcAgeFromBirth(birthFull) || get("inpAge");
+    }
+    return {
+        id: get("inpId"),
+        name: get("inpName"),
+        gender: get("selGender"),
+        birthFull: birthFull,
+        birthAge: age,
+        tel: get("inpTel"),
+        addr: get("inpAddr"),
+        district: get("selDistrict"),
+        village: get("selVillage"),
+        familyType: getCheckedList("famTypeCk"),
+        worker: get("selWorker"),
+        bell: get("selBell"),
+        email: get("inpEmail"),
+        devices: getCheckedList("devCk"),
+        services: getCheckedList("srvCk"),
+        famName: get("inpFamilyName"),
+        famTel: get("inpFamilyTel"),
+        relation: get("selRel"),
+        welfare: get("selWelfare"),
+        liveNum: get("inpLiveNum"),
+        remark: get("inpRemark"),
+        hkResident: get("selResident"),
+        job: get("inpJob"),
+        i425: get("inpI425"),
+        caseNo: get("inpCaseNo"),
+        serviceNeed: get("inpServiceNeed"),
+        serviceDate: get("inpServiceDate"),
+        isHidden: false
+    };
+}
+function formReset(){
+    document.querySelectorAll("input,select").forEach(el=>{ if(el.type!=="file") el.value=""; });
+    document.querySelectorAll("input[type=checkbox]").forEach(c=>{ c.checked=false; });
+    ageManuallySet = false;
+    document.getElementById("editStatusBar").style.display="none";
+    editingId = null;
+    document.getElementById("btnSaveEdit").disabled = true;
+    document.getElementById("btnSave").disabled = false;
+    refreshNextId();
+}
+function extractNumberFromId(id){
+    if(!id) return 0;
+    const m = String(id).match(/(\d+)$/);
+    return m ? parseInt(m[1],10) : 0;
+}
+function getNextId(){
+    let max = 0;
+    dataList.forEach(r => { const n = extractNumberFromId(r.id); if(n>max) max=n; });
+    oldImportList.forEach(r => { const n = extractNumberFromId(r.id); if(n>max) max=n; });
+    return String(max+1);
+}
+function refreshNextId(){
+    if(!editingId){
+        showIdValue(getNextId());
+    }
+}
+function showIdValue(v){
+    const el = document.getElementById("inpId");
+    el.type = "text";
+    el.value = v;
+}
+async function saveAllLocal(){
+    try{
+        if(_aesKey && window.crypto && crypto.subtle){
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(await encryptData(dataList, _aesKey)));
+            localStorage.setItem(STORAGE_OLD_IMPORT, JSON.stringify(await encryptData(oldImportList, _aesKey)));
+        } else {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(dataList));
+            localStorage.setItem(STORAGE_OLD_IMPORT, JSON.stringify(oldImportList));
+        }
+    }catch(e){
+        alert("⚠️ 儲存失敗（可能係空間不足），請先備份。");
+    }
+}
+async function loadLocal(){
+    try{
+        let wasPlain = false;
+        const d = localStorage.getItem(STORAGE_KEY);
+        if(d){
+            const p = JSON.parse(d);
+            if(p && p.v === 2 && _aesKey){
+                dataList = await decryptData(p, _aesKey);
+            } else if(Array.isArray(p)){
+                dataList = p; wasPlain = true;
+            }
+        }
+        const o = localStorage.getItem(STORAGE_OLD_IMPORT);
+        if(o){
+            const p = JSON.parse(o);
+            if(p && p.v === 2 && _aesKey){
+                oldImportList = await decryptData(p, _aesKey);
+            } else if(Array.isArray(p)){
+                oldImportList = p; wasPlain = true;
+            }
+        }
+        if(oldImportList.length===0 && dataList.length>0) oldImportList = dataList.slice();
+        const dateLike = s => /^(\d{4})[-./]\d{1,2}[-./]\d{1,2}/.test(String(s||""));
+        [dataList, oldImportList].forEach(arr => arr.forEach(r => {
+            if(!r.birthFull && r.birthAge && dateLike(r.birthAge)){
+                r.birthFull = r.birthAge;
+                r.birthAge = calcAgeFromBirth(r.birthFull) || "";
+            }
+        }));
+        /* 舊明文資料 → 登入後即刻加密入庫（過渡） */
+        if(wasPlain && _aesKey && window.crypto && crypto.subtle){
+            await saveAllLocal();
+        }
+    }catch(e){ dataList=[]; oldImportList=[]; }
+}
+
+function initBirthSelectors(){
+    const ySel = document.getElementById("selBirthYear");
+    const mSel = document.getElementById("selBirthMonth");
+    const dSel = document.getElementById("selBirthDay");
+    const now = new Date();
+    function makeOpt(sel, val, text){
+        const o = document.createElement("option");
+        o.value = val; o.textContent = text == null ? val : text;
+        sel.appendChild(o);
+    }
+    for(let yy=now.getFullYear(); yy>=1900; yy--) makeOpt(ySel, String(yy));
+    for(let mm=1; mm<=12; mm++) makeOpt(mSel, String(mm).padStart(2,"0"));
+
+    function fillDays(){
+        const y = ySel.value;
+        const m = mSel.value;
+        dSel.innerHTML = '<option value="">日</option>';
+        if(!y || !m) return;
+        const daysCnt = new Date(Number(y), Number(m), 0).getDate();
+        for(let dd=1; dd<=daysCnt; dd++) makeOpt(dSel, String(dd).padStart(2,"0"));
+    }
+    ySel.addEventListener("change", fillDays);
+    mSel.addEventListener("change", fillDays);
+    fillDays();
+}
+
+function calcAgeFromBirth(birthStr){
+    if(!birthStr) return "";
+    const s = String(birthStr).trim();
+    const m = s.match(/^(\d{4})(?:[-./](\d{1,2}))?(?:[-./](\d{1,2}))?$/);
+    if(!m) return "";
+    const by = +m[1], bm = m[2] ? +m[2] : null, bd = m[3] ? +m[3] : null;
+    const today = new Date();
+    let age = today.getFullYear() - by;
+    if(bm !== null){
+        if(today.getMonth()+1 < bm) age--;
+        else if(today.getMonth()+1 === bm){
+            if(bd !== null && today.getDate() < bd) age--;
+        }
+    }
+    return age >= 0 ? String(age) : "";
+}
+function syncBirthFull(){
+    const y=document.getElementById("selBirthYear").value;
+    const m=document.getElementById("selBirthMonth").value;
+    const d=document.getElementById("selBirthDay").value;
+    const fullEl = document.getElementById("inpBirthFull");
+    const ageEl  = document.getElementById("inpAge");
+    if(!y) return;
+    let full = y;
+    if(m) full += "-" + m;
+    if(m && d) full += "-" + d;
+    fullEl.value = full;
+    if(!ageManuallySet){
+        const age = calcAgeFromBirth(full);
+        if(age !== "") ageEl.value = age;
+    }
+}
+document.getElementById("inpAge").addEventListener("input", function(){
+    ageManuallySet = (this.value.trim() !== "");
+});
+document.getElementById("inpBirthFull").addEventListener("input", function(){
+    if(!ageManuallySet){
+        const age = calcAgeFromBirth(this.value);
+        if(age !== "") document.getElementById("inpAge").value = age;
+    }
+});
+["selBirthYear","selBirthMonth","selBirthDay"].forEach(id=>{
+    document.getElementById(id).addEventListener("change", syncBirthFull);
+});
+
+function renderVillageOptions(districtValue){
+    const vSel = document.getElementById("selVillage");
+    vSel.innerHTML = '<option value="">--請選擇村莊--</option>';
+    if(!districtValue){
+        return;
+    }
+    const list = VILLAGE_MAP[districtValue] || [];
+    const seen = new Set();
+    list.forEach(function(v){
+        if(seen.has(v)) return; // 去重，避免重複選項
+        seen.add(v);
+        const o = document.createElement("option");
+        o.value = v;
+        o.textContent = v;
+        vSel.appendChild(o);
+    });
+}
+function syncAddrFromDrop(){
+    const district = document.getElementById("selDistrict").value;
+    const village = document.getElementById("selVillage").value;
+    const parts = [];
+    if(district) parts.push(district);
+    if(village) parts.push(village);
+    document.getElementById("inpAddr").value = parts.join(" ");
+}
+
+/* ===================== 列表渲染 ===================== */
+function escHtml(s){
+    return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function matchKeyword(r, kw){
+    const hay = [
+        String(r.name || ""),
+        String(r.tel || ""),
+        String(r.district || ""),
+        String(r.village || ""),
+        String(r.addr || "")
+    ].join(" ").toLowerCase();
+    return hay.includes(kw);
+}
+function scrollListTo(where){
+    const box = document.getElementById("oldImportListBox");
+    if(!box) return;
+    box.scrollIntoView({ block: where === "top" ? "start" : "end", behavior: "smooth" });
+}
+async function applyDateToSelected(){
+    const d = document.getElementById("batchDate").value;
+    if(!d){ alert("⚠️ 請先揀日期"); return; }
+    const sel = getSelectedIndexes();
+    if(!sel.length){ alert("⚠️ 請先喺列表勾選個案（一個或者多個都得）"); return; }
+    sel.forEach(function(i){ if(dataList[i]) dataList[i].serviceDate = d; });
+    await saveAllLocal();
+    renderOldList();
+    updateSelCount();
+    alert("✅ 已將日期 " + d + " 加到 " + sel.length + " 個個案");
+}
+function renderOldList(){
+    const box = document.getElementById("oldImportListBox");
+    const kw = (document.getElementById("searchKeyword").value || "").trim().toLowerCase();
+    if(oldImportList.length === 0){
+        box.innerHTML = '<div style="color:#888;padding:10px;">未有個案紀錄。喺上面輸入資料後撳「💾 儲存個案」。</div>';
+        return;
+    }
+    const hiddenCount = oldImportList.filter(r => r.isHidden).length;
+    let html = hiddenCount > 0
+        ? '<div style="color:#b45309;font-size:13px;padding:4px 0 8px;">🙈 已隱藏 ' + hiddenCount + ' 條（撳「👁 顯示全部」可恢復顯示）</div>'
+        : '';
+    if(kw) html += '<div style="color:#1d4ed8;font-size:13px;padding:2px 0 6px;">🔍 搜尋「' + escHtml(kw) + '」</div>';
+    let shown = 0;
+    oldImportList.forEach(function(r, i){
+        if(r.isHidden) return;
+        if(kw && !matchKeyword(r, kw)) return;
+        shown++;
+        const tel = r.tel ? '｜📞 ' + escHtml(r.tel) : '';
+        const fam = r.familyType ? '<div style="margin-top:2px;"><span class="tag">家庭類別</span>' + escHtml(r.familyType) + '</div>' : '';
+        html += '<div class="record-item">'
+            + '<div class="record-item-checkbox"><input type="checkbox" data-idx="' + i + '" onchange="updateSelCount()"></div>'
+            + '<div class="record-item-content">'
+            + '<div class="preview-line"><b>#' + escHtml(r.id) + '</b> ' + escHtml(r.name || "(冇填姓名)")
+            + '｜' + escHtml(r.gender) + '｜' + escHtml(r.birthFull) + '（' + escHtml(r.birthAge) + '歲）'
+            + '｜' + escHtml(r.district) + ' ' + escHtml(r.village) + tel + '</div>'
+            + fam
+            + '<div class="item-btn-bar">'
+            + '<button class="btn-blue btn-small" onclick="loadToEdit(' + i + ')">✏️ 修改</button>'
+            + '<button class="btn-red btn-small" onclick="deleteCase(' + i + ')">🗑 刪除</button>'
+            + '<button class="btn-grey btn-small" onclick="toggleDetail(' + i + ')">📖 詳情</button>'
+            + '</div>'
+            + '<div class="full-detail" id="detail-' + i + '">' + buildDetailHtml(r) + '</div>'
+            + '</div></div>';
+    });
+    if(kw && shown === 0) html += '<div style="color:#888;padding:8px;">搵唔到符合「' + escHtml(kw) + '」嘅個案</div>';
+    box.innerHTML = html;
+    updateSelCount();
+}
+function buildDetailHtml(r){
+    const line = function(k, v){
+        return v ? '<div><b>' + escHtml(k) + '：</b>' + escHtml(v) + '</div>' : '';
+    };
+    return line("性別", r.gender)
+        + line("出生日期", r.birthFull)
+        + line("年齡", r.birthAge)
+        + line("聯絡電話", r.tel)
+        + line("地區", r.district)
+        + line("村莊/地址", r.village)
+        + line("電郵", r.email)
+        + line("完整地址", r.addr)
+        + line("家庭類別", r.familyType)
+        + line("工人", r.worker)
+        + line("平安鐘", r.bell)
+        + line("家屬姓名", r.famName)
+        + line("家屬電話", r.famTel)
+        + line("關係", r.relation)
+        + line("政府福利", r.welfare)
+        + line("居住人數", r.liveNum)
+        + line("備注", r.remark)
+        + line("香港永久性居民", r.hkResident)
+        + line("職業", r.job)
+        + line("社署 I-425", r.i425)
+        + line("個案編號", r.caseNo)
+        + line("特殊支援設備", r.devices)
+        + line("要求的服務", r.services)
+        + line("服務要求詳情", r.serviceNeed)
+        + line("服務日期", r.serviceDate);
+}
+function toggleDetail(idx){
+    const el = document.getElementById("detail-" + idx);
+    if(el) el.classList.toggle("open");
+}
+async function deleteCase(idx){
+    const rec = oldImportList[idx];
+    if(!rec) return;
+    if(!confirm("⚠️ 確定要刪除個案 #" + rec.id + " " + (rec.name || "") + " ？")) return;
+    oldImportList.splice(idx, 1);
+    const di = dataList.findIndex(r => r.id === rec.id);
+    if(di >= 0) dataList.splice(di, 1);
+    await saveAllLocal();
+    renderOldList();
+    refreshCaseSelect();
+    refreshNextId();
+}
+async function setAllHidden(v){
+    dataList.forEach(r => { r.isHidden = v; });
+    oldImportList.forEach(r => { r.isHidden = v; });
+    await saveAllLocal();
+    renderOldList();
+}
+async function clearOldImport(){
+    if(!confirm("⚠️ 確定要清空顯示列表？（主資料庫會保留，刷新頁面後會重新載入）")) return;
+    oldImportList = [];
+    await saveAllLocal();
+    renderOldList();
+}
+
+/* ===================== 勾選 / 全選 ===================== */
+function getSelectedIndexes(){
+    return [...document.querySelectorAll("#oldImportListBox .record-item input[type=checkbox]:checked")]
+        .map(c => parseInt(c.dataset.idx, 10))
+        .filter(n => !isNaN(n));
+}
+function toggleSelectAll(){
+    const boxes = [...document.querySelectorAll("#oldImportListBox .record-item input[type=checkbox]")];
+    if(!boxes.length) return;
+    const allOn = boxes.every(b => b.checked);
+    boxes.forEach(b => b.checked = !allOn);
+    updateSelCount();
+}
+function updateSelCount(){
+    const n = getSelectedIndexes().length;
+    const el = document.getElementById("selCount");
+    if(el) el.textContent = n ? "☑ 已勾選 " + n + " 個" : "";
+}
+
+/* ===================== 匯入 Excel / JSON ===================== */
+function normalizeHeader(h){
+    const t = String(h || "").trim().replace(/[\s（）()＊*#]/g, "");
+    const alias = {
+        "編號":"id","编号":"id","ID":"id","id":"id",
+        "姓名":"name","名字":"name","名稱":"name","名称":"name",
+        "性別":"gender","性别":"gender",
+        "出生日期":"birthFull","生日":"birthFull","出生年月日":"birthFull","出生年月":"birthFull",
+        "年齡":"birthAge","年龄":"birthAge","岁数":"birthAge",
+        "聯絡電話":"tel","聯絡電話號碼":"tel","電話":"tel","电话":"tel","電話號碼":"tel","电话号码":"tel","手機":"tel","手机":"tel","联系电话":"tel",
+        "電郵地址":"email","電郵":"email","邮箱":"email","email":"email",
+        "地區":"district","区域":"district","區域":"district",
+        "村莊/地址":"village","村莊":"village","村庄":"village","屋邨":"village","村":"village",
+        "完整地址":"addr","住址":"addr","地址":"addr","详细地址":"addr","詳細地址":"addr",
+        "家庭類別":"familyType","家庭类别":"familyType",
+        "工人":"worker","傭工":"worker","佣工":"worker",
+        "平安鐘":"bell","平安钟":"bell","平安鈴":"bell","平安铃":"bell",
+        "家屬姓名":"famName","家属姓名":"famName","家屬":"famName","家属":"famName",
+        "家屬電話":"famTel","家属电话":"famTel",
+        "關係":"relation","关系":"relation",
+        "政府福利":"welfare","福利":"welfare",
+        "居住人數":"liveNum","居住人数":"liveNum","人數":"liveNum","人数":"liveNum",
+        "備注":"remark","備註":"remark","备注":"remark","註":"remark","注":"remark",
+        "香港永久性居民":"hkResident","永久居民":"hkResident",
+        "職業":"job","职业":"job",
+        "社署I-425":"i425","社署I425":"i425","I-425":"i425","I425":"i425","i425":"i425",
+        "個案編號":"caseNo","案件編號":"caseNo","案件编号":"caseNo","个案编号":"caseNo",
+        "特殊支援設備":"devices","特殊支援设备":"devices","支援設備":"devices","支援设备":"devices","設備":"devices","设备":"devices",
+        "要求的服務":"services","要求的服务":"services","服務":"services","服务":"services","要求服務":"services","要求服务":"services",
+        "服務要求詳情":"serviceNeed","服务要求详情":"serviceNeed","服務詳情":"serviceNeed","服务详情":"serviceNeed","要求詳情":"serviceNeed","要求详情":"serviceNeed",
+        "服務日期":"serviceDate","服务日期":"serviceDate","日期":"serviceDate"
+    };
+    if(alias[t] !== undefined) return alias[t];
+    if(alias[t.toLowerCase()] !== undefined) return alias[t.toLowerCase()];
+    return null;
+}
+function importExcelFile(file){
+    const reader = new FileReader();
+    reader.onload = async function(e){
+        try{
+            const wb = XLSX.read(new Uint8Array(e.target.result), {type:"array"});
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
+            if(rows.length < 2){ alert("⚠️ Excel 檔入面冇資料行"); return; }
+            const headers = rows[0].map(h => String(h == null ? "" : h).trim());
+            let added = 0, updated = 0, skipped = 0;
+            for(let i = 1; i < rows.length; i++){
+                const row = rows[i] || [];
+                const rec = { isHidden:false };
+                headers.forEach(function(h, ci){
+                    const f = normalizeHeader(h);
+                    if(f) rec[f] = String(row[ci] == null ? "" : row[ci]).trim();
+                });
+                if(!rec.id && !rec.name){ skipped++; continue; }
+                if(!rec.id) rec.id = getNextId();
+                const dupIdx = rec.id ? dataList.findIndex(r => r.id === rec.id) : -1;
+                if(dupIdx >= 0){ dataList[dupIdx] = Object.assign({}, dataList[dupIdx], rec); updated++; }
+                else { dataList.push(rec); added++; }
+            }
+            oldImportList = dataList.slice();
+            await saveAllLocal();
+            renderOldList();
+            refreshCaseSelect();
+            refreshNextId();
+            alert("✅ Excel 匯入完成：新增 " + added + " 條，更新 " + updated + " 條" + (skipped ? "，跳過 " + skipped + " 行（冇姓名又冇編號）" : ""));
+        }catch(err){
+            alert("⚠️ Excel 匯入失敗：" + err.message);
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+function importJsonFile(file){
+    const reader = new FileReader();
+    reader.onload = async function(e){
+        try{
+            const data = JSON.parse(e.target.result);
+            let arr = Array.isArray(data) ? data : (data.dataList || []);
+            if(!Array.isArray(arr)) arr = [];
+            if(!arr.length){ alert("⚠️ JSON 檔入面冇個案資料"); return; }
+            let added = 0, updated = 0, skipped = 0;
+            arr.forEach(function(rec){
+                if(!rec || typeof rec !== "object"){ skipped++; return; }
+                const id = String(rec.id || "").trim();
+                if(!id && !String(rec.name || "").trim()){ skipped++; return; }
+                rec.isHidden = false;
+                if(id){
+                    const dupIdx = dataList.findIndex(r => r.id === id);
+                    if(dupIdx >= 0){ dataList[dupIdx] = Object.assign({}, dataList[dupIdx], rec); updated++; return; }
+                }
+                dataList.push(Object.assign({isHidden:false}, rec));
+                added++;
+            });
+            oldImportList = dataList.slice();
+            await saveAllLocal();
+            renderOldList();
+            refreshCaseSelect();
+            refreshNextId();
+            alert("✅ JSON 匯入完成：新增 " + added + " 條，更新 " + updated + " 條" + (skipped ? "，跳過 " + skipped + " 條" : ""));
+        }catch(err){
+            alert("⚠️ JSON 匯入失敗：" + err.message + "（請確認係本系統備份嘅 JSON 檔案）");
+        }
+    };
+    reader.readAsText(file);
+}
+
+/* ===================== 載入編輯 ===================== */
+function loadToEdit(idx){
+    const rec = oldImportList[idx];
+    if(!rec) return;
+    const mainIdx = dataList.findIndex(r => r.id === rec.id);
+    const target = mainIdx >= 0 ? dataList[mainIdx] : rec;
+    editingId = target.id;
+    showIdValue(target.id || "");
+    document.getElementById("inpName").value = target.name || "";
+    document.getElementById("selGender").value = target.gender || "";
+    document.getElementById("inpBirthFull").value = target.birthFull || "";
+    document.getElementById("inpAge").value = target.birthAge || "";
+    ageManuallySet = !!(target.birthAge && String(target.birthAge).trim() !== "");
+    document.getElementById("inpTel").value = target.tel || "";
+    document.getElementById("inpEmail").value = target.email || "";
+    document.getElementById("selDistrict").value = target.district || "";
+    renderVillageOptions(target.district || "");
+    document.getElementById("selVillage").value = target.village || "";
+    document.getElementById("inpAddr").value = target.addr || "";
+    setCheckedList("famTypeCk", target.familyType);
+    document.getElementById("selWorker").value = target.worker || "";
+    document.getElementById("selBell").value = target.bell || "";
+    setCheckedList("devCk", target.devices);
+    setCheckedList("srvCk", target.services);
+    document.getElementById("inpFamilyName").value = target.famName || "";
+    document.getElementById("inpFamilyTel").value = target.famTel || "";
+    document.getElementById("selRel").value = target.relation || "";
+    document.getElementById("selWelfare").value = target.welfare || "";
+    document.getElementById("inpLiveNum").value = target.liveNum || "";
+    document.getElementById("inpRemark").value = target.remark || "";
+    document.getElementById("selResident").value = target.hkResident || "";
+    document.getElementById("inpJob").value = target.job || "";
+    document.getElementById("inpI425").value = target.i425 || "";
+    document.getElementById("inpCaseNo").value = target.caseNo || "";
+    document.getElementById("inpServiceNeed").value = target.serviceNeed || "";
+    document.getElementById("inpServiceDate").value = target.serviceDate || "";
+    const bar = document.getElementById("editStatusBar");
+    bar.style.display = "inline-flex";
+    bar.textContent = "✏️ 正在修改個案 #" + target.id + "（撳「修改儲存」完成）";
+    document.getElementById("btnSaveEdit").disabled = false;
+    document.getElementById("btnSave").disabled = true;
+    document.getElementById("mainWrap").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+/* ===================== 儲存 ===================== */
+async function saveCase(){
+    const idEl = document.getElementById("inpId");
+    let id = idEl.value.trim();
+    const name = document.getElementById("inpName").value.trim();
+    if(!id){ id = getNextId(); idEl.type = "text"; idEl.value = id; }
+    if(!name){ alert("⚠️ 請填寫姓名"); document.getElementById("inpName").focus(); return; }
+    const dup = dataList.find(r => r.id === id && r.id !== editingId);
+    if(dup){ alert("⚠️ 編號「" + id + "」已經存在，請改用其他編號"); idEl.focus(); return; }
+    const rec = getFormData();
+    if(editingId){
+        const idx = dataList.findIndex(r => r.id === editingId);
+        if(idx >= 0) dataList[idx] = rec;
+        editingId = null;
+    }else{
+        dataList.push(rec);
+    }
+    oldImportList = dataList.slice();
+    await saveAllLocal();
+    renderOldList();
+    refreshCaseSelect();
+    formReset();
+    alert("✅ 個案已儲存");
+}
+async function clearAllData(){
+    if(!confirm("⚠️ 確定要清空全部紀錄？此動作無法復原！\n建議先做「⬇ JSON 備份」。")) return;
+    dataList = [];
+    oldImportList = [];
+    await saveAllLocal();
+    renderOldList();
+    refreshCaseSelect();
+    formReset();
+    alert("🗑 全部紀錄已清空");
+}
+
+/* ===================== 匯出 Excel / JSON 備份 ===================== */
+function dateStr(){
+    const d = new Date();
+    const p = n => String(n).padStart(2, "0");
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate());
+}
+function exportAllExcel(){
+    if(dataList.length === 0){ alert("⚠️ 目前冇任何個案可以匯出"); return; }
+    const headers = ["編號","姓名","性別","出生日期","年齡","聯絡電話","電郵地址","地區","村莊/地址","完整地址","家庭類別","工人","平安鐘","家屬姓名","家屬電話","關係","政府福利","居住人數","備注","香港永久性居民","職業","社署I-425","個案編號","特殊支援設備","要求的服務","服務要求詳情","服務日期"];
+    const rows = dataList.map(r => [
+        r.id||"", r.name||"", r.gender||"", r.birthFull||"", r.birthAge||"",
+        r.tel||"", r.email||"", r.district||"", r.village||"", r.addr||"",
+        r.familyType||"", r.worker||"", r.bell||"", r.famName||"", r.famTel||"",
+        r.relation||"", r.welfare||"", r.liveNum||"", r.remark||"", r.hkResident||"",
+        r.job||"", r.i425||"", r.caseNo||"", r.devices||"", r.services||"",
+        r.serviceNeed||"", r.serviceDate||""
+    ]);
+    try{
+        const ws = XLSX.utils.aoa_to_sheet([headers].concat(rows));
+        ws["!cols"] = headers.map(h => ({wch: Math.max(10, h.length * 2 + 6)}));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "個案紀錄");
+        XLSX.writeFile(wb, "離島個案紀錄_" + dateStr() + ".xlsx");
+    }catch(e){
+        alert("⚠️ 匯出 Excel 失敗：" + e.message);
+    }
+}
+function exportBackup(){
+    if(dataList.length === 0 && oldImportList.length === 0){ alert("⚠️ 目前冇任何資料可以備份"); return; }
+    const payload = {
+        app: "離島社署個案綜合系統",
+        exportTime: new Date().toLocaleString("zh-HK"),
+        dataList: dataList,
+        oldImportList: oldImportList
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {type:"application/json;charset=utf-8"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "個案系統備份_" + dateStr() + ".json";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 100);
+}
+function exportSelectedExcel(){
+    const sel = getSelectedIndexes();
+    const recs = sel.map(i => dataList[i]).filter(Boolean);
+    if(!recs.length){ alert("⚠️ 請先喺個案列表勾選個案（一個或者多個都得）"); return; }
+    const headers = ["編號","姓名","性別","出生日期","年齡","聯絡電話","電郵地址","地區","村莊/地址","完整地址","家庭類別","工人","平安鐘","家屬姓名","家屬電話","關係","政府福利","居住人數","備注","香港永久性居民","職業","社署I-425","個案編號","特殊支援設備","要求的服務","服務要求詳情","服務日期"];
+    const rows = recs.map(r => [
+        r.id||"", r.name||"", r.gender||"", r.birthFull||"", r.birthAge||"",
+        r.tel||"", r.email||"", r.district||"", r.village||"", r.addr||"",
+        r.familyType||"", r.worker||"", r.bell||"", r.famName||"", r.famTel||"",
+        r.relation||"", r.welfare||"", r.liveNum||"", r.remark||"", r.hkResident||"",
+        r.job||"", r.i425||"", r.caseNo||"", r.devices||"", r.services||"",
+        r.serviceNeed||"", r.serviceDate||""
+    ]);
+    try{
+        const ws = XLSX.utils.aoa_to_sheet([headers].concat(rows));
+        ws["!cols"] = headers.map(h => ({wch: Math.max(10, h.length * 2 + 6)}));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "個案紀錄");
+        XLSX.writeFile(wb, "離島個案勾選_" + dateStr() + ".xlsx");
+        alert("✅ 已匯出 " + recs.length + " 個勾選個案做 Excel");
+    }catch(e){
+        alert("⚠️ 匯出 Excel 失敗：" + e.message);
+    }
+}
+
+/* ===================== 合併列印 ===================== */
+function refreshCaseSelect(){
+    const sel = document.getElementById("caseSelect");
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— 合併列印：揀個案 —</option>';
+    dataList.forEach(function(r){
+        if(r.isHidden) return;
+        const o = document.createElement("option");
+        o.value = r.id;
+        o.textContent = "#" + r.id + " " + (r.name || "") + "（" + (r.district || "") + "）";
+        sel.appendChild(o);
+    });
+    if(cur && dataList.some(r => r.id === cur)) sel.value = cur;
+}
+function setPrintField(scope, name, val){
+    (scope || document).querySelectorAll('[data-f="' + name + '"]').forEach(function(el){
+        const v = val == null ? "" : String(val);
+        if(el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT") el.value = v;
+        else if(el.classList && el.classList.contains("ul")){
+            el.style.height = "15px";
+            el.innerHTML = '<span style="position:relative; top:-3px;">' + escHtml(v) + '</span>';
+        }
+        else el.textContent = v;
+    });
+}
+function setPrintCk(scope, group, val, on){
+    (scope || document).querySelectorAll('[data-g="' + group + '"][data-ck="' + val + '"]').forEach(function(el){
+        el.checked = !!on;
+    });
+}
+function splitVals(str){
+    return String(str || "").split(/[、,，]/).map(s => s.trim()).filter(Boolean);
+}
+function fillPrintPage(r, p1, p2, p3){
+    if(p1){
+        setPrintField(p1, "caseNo", r.caseNo || r.id);
+        setPrintField(p1, "date", r.serviceDate || "");
+        setPrintField(p1, "name", r.name);
+        setPrintField(p1, "tel", r.tel);
+        setPrintField(p1, "addr", r.addr);
+        setPrintField(p1, "email", r.email);
+        setPrintField(p1, "gender", r.gender);
+        setPrintField(p1, "birthYear", r.birthFull ? String(r.birthFull).slice(0, 4) : "");
+        setPrintField(p1, "job", r.job);
+        setPrintField(p1, "famName", r.famName);
+        setPrintField(p1, "famRel", r.relation);
+        setPrintField(p1, "famTel", r.famTel);
+        setPrintCk(p1, "resident", "是", r.hkResident === "是");
+        setPrintCk(p1, "resident", "否", r.hkResident === "否");
+        splitVals(r.familyType).forEach(v => setPrintCk(p1, "fam", v, true));
+        splitVals(r.devices).forEach(v => setPrintCk(p1, "dev", v, true));
+    }
+    if(p2){
+        setPrintField(p2, "name", r.name);
+        setPrintField(p2, "date", r.serviceDate || "");
+        setPrintField(p2, "serviceNeed", r.serviceNeed);
+        splitVals(r.services).forEach(v => setPrintCk(p2, "srv", v, true));
+    }
+    if(p3){
+        setPrintField(p3, "liveNum", r.liveNum);
+        setPrintField(p3, "date", r.serviceDate || "");
+        setPrintCk(p3, "worker", "有", r.worker === "有");
+        setPrintCk(p3, "worker", "冇", r.worker === "冇");
+        setPrintCk(p3, "bell", "有", r.bell === "有");
+        setPrintCk(p3, "bell", "冇", r.bell === "冇");
+        if(r.welfare) setPrintCk(p3, "welfare", r.welfare, true);
+    }
+}
+function applySelectedCase(){
+    const id = document.getElementById("caseSelect").value;
+    if(!id){ alert("請先喺列印工具列揀一個個案"); return; }
+    const r = dataList.find(x => x.id === id);
+    if(!r){ alert("⚠️ 搵唔到個案 #" + id); return; }
+    const pages = document.querySelectorAll(".print-section > .page");
+    fillPrintPage(r, pages[0], pages[1], pages[2]);
+    alert("✅ 已將個案 #" + r.id + " 載入列印表格");
+}
+function buildPrintPages(records){
+    const container = document.getElementById("printAllContainer");
+    container.innerHTML = "";
+    const srcPages = document.querySelectorAll(".print-section > .page");
+    records.forEach(function(r, ri){
+        srcPages.forEach(function(pg, pi){
+            const clone = pg.cloneNode(true);
+            clone.classList.remove("break-before");
+            if(!(ri === 0 && pi === 0)) clone.classList.add("break-before");
+            clone.querySelectorAll("input[type=text]").forEach(el => el.value = "");
+            clone.querySelectorAll("input[type=checkbox]").forEach(el => el.checked = false);
+            container.appendChild(clone);
+        });
+    });
+    const allPages = container.querySelectorAll(".page");
+    records.forEach(function(r, ri){
+        fillPrintPage(r, allPages[ri * 4], allPages[ri * 4 + 1], allPages[ri * 4 + 2]);
+    });
+}
+function printSelected(){
+    const sel = getSelectedIndexes();
+    const recs = sel.map(i => dataList[i]).filter(Boolean);
+    if(!recs.length){ alert("⚠️ 請先喺個案列表勾選個案（一個或者多個都得）"); return; }
+    buildPrintPages(recs);
+    document.body.classList.add("printing-all");
+    window.print();
+}
+function printAllCases(){
+    if(!dataList.length){ alert("⚠️ 而家冇任何個案可以列印"); return; }
+    buildPrintPages(dataList);
+    document.body.classList.add("printing-all");
+    window.print();
+}
+window.onafterprint = function(){
+    document.body.classList.remove("printing-all");
+};
+function clearFilled(){
+    if(!confirm("確定要清空列印表格已填內容？")) return;
+    document.querySelectorAll('.print-section input[type=text], .print-section input[type=checkbox]').forEach(function(el){
+        if(el.type === "checkbox") el.checked = false;
+        else el.value = "";
+    });
+    alert("🗑 列印表格已清空");
+}
+
+/* ===================== 初始化 ===================== */
+async function mainInit(){
+    await loadLocal();
+    if(!(window.crypto && crypto.subtle)){
+        alert("⚠️ 此瀏覽器唔支援加密（Web Crypto），資料會以明文儲存，建議改用 Chrome／Edge 開啟。");
+    }
+    initBirthSelectors();
+
+    // 地址下拉聯動（地區 → 村莊 → 地址自動組合）
+    document.getElementById("selDistrict").addEventListener("change", function(){
+        renderVillageOptions(this.value);
+        syncAddrFromDrop();
+    });
+    document.getElementById("selVillage").addEventListener("change", function(){
+        syncAddrFromDrop();
+    });
+
+    // 自動編號
+    document.getElementById("btnNewId").addEventListener("click", function(){
+        showIdValue(getNextId());
+    });
+    // 手動輸入編號 → 隱藏數字（唔顯示）
+    document.getElementById("inpId").addEventListener("input", function(){
+        const el = document.getElementById("inpId");
+        if(el.type !== "password" && el.value !== "") el.type = "password";
+    });
+
+    // 儲存 / 修改 / 重設
+    document.getElementById("btnSave").addEventListener("click", saveCase);
+    document.getElementById("btnSaveEdit").addEventListener("click", saveCase);
+    document.getElementById("btnReset").addEventListener("click", function(){
+        if(!confirm("確定要重設表單？未儲存嘅資料會消失")) return;
+        formReset();
+    });
+
+    // 匯出 / 匯入 / 備份 / 清空
+    document.getElementById("btnExportAllExcel").addEventListener("click", exportAllExcel);
+    document.getElementById("btnExportBackup").addEventListener("click", exportBackup);
+    document.getElementById("btnClearAll").addEventListener("click", clearAllData);
+    document.getElementById("btnImportExcel").addEventListener("click", function(){
+        document.getElementById("fileImportExcel").click();
+    });
+    document.getElementById("fileImportExcel").addEventListener("change", function(e){
+        if(e.target.files && e.target.files[0]) importExcelFile(e.target.files[0]);
+        e.target.value = "";
+    });
+    document.getElementById("btnImportJson").addEventListener("click", function(){
+        document.getElementById("fileImportJson").click();
+    });
+    document.getElementById("fileImportJson").addEventListener("change", function(e){
+        if(e.target.files && e.target.files[0]) importJsonFile(e.target.files[0]);
+        e.target.value = "";
+    });
+
+    // 列表：隱藏 / 顯示 / 清空 / 全選 / 搜尋
+    document.getElementById("btnHideAllOld").addEventListener("click", function(){ setAllHidden(true); });
+    document.getElementById("btnShowAllOld").addEventListener("click", function(){ setAllHidden(false); });
+    document.getElementById("btnClearOldImport").addEventListener("click", clearOldImport);
+    document.getElementById("btnSelectAll").addEventListener("click", toggleSelectAll);
+    document.getElementById("btnBatchDate").addEventListener("click", applyDateToSelected);
+    document.getElementById("btnExportSel").addEventListener("click", exportSelectedExcel);
+    document.getElementById("searchKeyword").addEventListener("input", function(){
+        renderOldList();
+    });
+
+    renderOldList();
+    refreshCaseSelect();
+    refreshNextId();
+    updateSelCount();
+}
+</script>
+<button type="button" id="btnFloatTop" onclick="scrollListTo('top')" title="跳返列表頂">⬆</button>
+</body>
+</html>
