@@ -1,14 +1,16 @@
 
+
 <!DOCTYPE html>
 <html lang="zh-HK">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>離島社署個案綜合系統｜標題位置+4頁列印+功能完整修復</title>
+<title>離島社區個案綜合系統</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script>
-const PW1 = "90759707";
-const PW2 = "29847633";
+// 密碼改存 SHA-256 指紋（唔再明文寫死，睇 source 都睇唔到真密碼）
+const PW1_HASH = "a49eeadd3c768918844793a63e837834fbe4e42c8853fecdc76edb5f6c9a6e9b";
+const PW2_HASH = "e28133a0a683a994ca27fc241be4a0524e4d4455e8511011f65fb69174062fa0";
 
 window.addEventListener('DOMContentLoaded', function(){
     initLogin();
@@ -30,18 +32,36 @@ function initLogin(){
         pw1.type = t;
         pw2.type = t;
     });
-    function doLogin(){
+    async function doLogin(){
         err.textContent = "";
-        if(pw1.value !== PW1){
-            err.textContent = "❌ 第一層密碼錯誤，拒絕存取";
-            pw1.value = ""; pw1.focus(); return;
+        const lock = getLockState();
+        if(lock && lock.until > Date.now()){
+            const mins = Math.ceil((lock.until - Date.now())/60000);
+            err.textContent = "🔒 錯誤次數過多，已鎖定，請 " + mins + " 分鐘後再試";
+            return;
         }
-        if(pw2.value !== PW2){
-            err.textContent = "❌ 第二組驗證密碼錯誤，拒絕存取";
-            pw2.value = ""; pw2.focus(); return;
+        const h1 = await sha256Hex(pw1.value);
+        const h2 = await sha256Hex(pw2.value);
+        if(h1 !== PW1_HASH || h2 !== PW2_HASH){
+            const st = getLockState() || {n:0, until:0};
+            st.n = (st.n||0) + 1;
+            if(st.n >= 5){
+                st.until = Date.now() + 10*60000;
+                st.n = 0;
+                err.textContent = "🔒 連續錯誤 5 次，已鎖定 10 分鐘";
+            } else {
+                err.textContent = "❌ 密碼錯誤（第 " + st.n + "/5 次）";
+            }
+            try{ localStorage.setItem(LOCK_KEY, JSON.stringify(st)); }catch(e){}
+            pw1.value = ""; pw2.value = "";
+            pw1.focus();
+            return;
         }
+        localStorage.removeItem(LOCK_KEY);
+        _aesKey = await deriveKey(pw1.value + "|" + pw2.value);
         overlay.style.display = "none";
         document.getElementById("mainContentWrap").style.display = "block";
+        startIdleTimer();
         mainInit();
     }
 }
@@ -136,10 +156,10 @@ input[type=text],input[type=date],select{padding:5px 7px;border:1px solid #bbb;b
 .record-item{display:flex;gap:10px;padding:10px;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:8px;background:#fafafa;}
 .record-item-checkbox{display:flex;align-items:flex-start;padding-top:4px;}
 .record-item-content{flex:1;}
-.preview-line{font-size:14px;line-height:1.6;}
-.full-detail{display:none;margin-top:6px;padding-top:6px;border-top:1px dashed #ccc;font-size:13px;line-height:1.7;}
+.preview-line{font-size:16px;line-height:1.6;}
+.full-detail{display:none;margin-top:6px;padding-top:6px;border-top:1px dashed #ccc;font-size:15px;line-height:1.7;}
 .full-detail.open{display:block;}
-.tag{display:inline-block;background:#e0f2fe;color:#0369a1;padding:1px 8px;border-radius:10px;font-size:12px;margin:2px 3px 2px 0;}
+.tag{display:inline-block;background:#e0f2fe;color:#0369a1;padding:1px 8px;border-radius:10px;font-size:13px;margin:2px 3px 2px 0;}
 .item-btn-bar{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;}
 #editStatusBar{display:none;align-items:center;gap:6px;padding:6px 10px;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;font-size:13px;color:#9a3412;}
 
@@ -195,6 +215,17 @@ td, th {
     font-size: 10pt;line-height: 1.5;
 }
 td.sec {font-weight: bold; font-size: 10pt; text-align: left; }
+
+/* ===== 字體：跟政府標準表格一樣用明體/宋體 ===== */
+body, .page, table, td, th, div, p, span, label, input, textarea, select, button, sup {
+    font-family: "PMingLiU","MingLiU","新細明體","細明體","SimSun","宋體","Songti TC","Noto Serif TC","AR PL UMing","Noto Serif CJK TC",serif;
+}
+.fillin-box {
+    border: 1px solid #000; background: #fff; font-family: inherit; font-size: 10pt;
+    padding: 1px 4px; height: 16px; vertical-align: middle; border-radius: 0;
+}
+/* 跟進工作詳情大框：列印時都要有框線 */
+.followup-box { border: 1px solid #000 !important; }
 .ul {
     border-bottom: 1px solid #000;display: inline-block; height: 10px; vertical-align: -1px;
 }
@@ -210,6 +241,12 @@ sup { font-size: 6.5pt; }
 .notes { margin-top: 3px; font-size: 9pt; line-height: 1.5; }
 .notes p { margin: 0; }.notes .sub { padding-left: 14px; }
 .bigbox {border: 1px solid #000;min-height: 62mm;}
+.bigbox-area {
+    width: 100%; box-sizing: border-box; display: block;
+    border-radius: 0; font-size: 10pt; font-family: inherit;
+    padding: 4px 6px; resize: none; background: #fff;
+    min-height: 62mm;
+}
 .fillin {
     border: none;background: transparent;font-family: inherit;font-size: 10pt;color: #000;
     padding: 0 2px;width: 72%;height: 15px;line-height: 1;vertical-align: bottom;
@@ -221,6 +258,15 @@ sup { font-size: 6.5pt; }
 }
 .fillin-plain:focus { outline: 1px solid #aaa; background: #f7f7f7; }
 .fillin-sm { width: 30px; }
+.ul-input {
+    border: none !important;
+    border-bottom: 1px solid #000 !important;
+    background: transparent !important;
+    border-radius: 0 !important;
+    padding: 0 3px 7px !important;
+    vertical-align: bottom;
+    height: 19px;
+}
 .ck {
     -webkit-appearance: none; appearance: none;display: inline-block; width: 9px; height: 9px;
     border: 1px solid #000; margin: 0 3px 0 0;vertical-align: 0; background: #fff; padding: 0; cursor: pointer;
@@ -263,7 +309,7 @@ sup { font-size: 6.5pt; }
         break-before: page;
     }
     .page-first{
-        padding:7mm 10mm 4mm 8mm;
+        padding:10mm 10mm 4mm 8mm;
     }
     .page-second, .page-third {
         padding-top: 8mm;
@@ -277,15 +323,44 @@ sup { font-size: 6.5pt; }
     /* ===== 壓縮排版：確保第1頁內容收喺一頁，總共4頁 ===== */
     .title1 { font-size: 12pt; line-height: 1.1; letter-spacing: 0; }
     .title2 { font-size: 13.5pt; margin: 0 0 2px; line-height: 1.1; }
+
+    /* ===== 標題同文字字體唔好咁粗（列印時） ===== */
+    .title1, .title2, td.sec,
+    div[style*="font-weight:bold"], div[style*="font-weight: bold"],
+    p[style*="font-weight:bold"], p[style*="font-weight: bold"] {
+        font-weight: normal !important;
+    }
+    /* ===== 列印字體用明體（跟政府標準表格一樣） ===== */
+    body, .page, table, td, th, div, p, span, label, input, textarea, select, button, sup {
+        font-family: "PMingLiU","MingLiU","新細明體","細明體","SimSun","宋體","Songti TC","Noto Serif TC","AR PL UMing","Noto Serif CJK TC",serif !important;
+    }
     table { margin-bottom: 0 !important; }
     td, th { font-size: 8.5pt; padding: 1px 3px; line-height: 1.22; }
+    .noline .ul { border-bottom: 1px solid #000; }
     .checkrow { line-height: 1.22; }
     .checkrow + .checkrow { margin-top: 0; }
     sup { font-size: 5pt; }
     .notes { font-size: 7pt; line-height: 1.15; margin-top: 1px; }
     .notes p { margin: 0; }
     .notes .sub { padding-left: 8px; }
-    .fillin, .fillin-plain { font-size: 8.5pt; height: 10px; min-height: 0 !important; }
+    .fillin, .fillin-plain { font-size: 8.5pt; height: 15px; min-height: 0 !important; vertical-align: 1px; }
+    .ul-input { height: 19px; padding-bottom: 7px; }
+
+    /* ===== 填寫資料嘅線框列印時唔顯示（跟參考圖：淨表格手寫） ===== */
+    .fillin, .fillin-plain, .ul-input {
+        border: none !important;
+        background: transparent !important;
+    }
+    .fillin-box { border: 1px solid #000 !important; background: #fff !important; }
+    .bigbox, .bigbox-area { border: none !important; }
+    /* 聲明及同意（甲/乙項）＋關愛隊人員：列印時簽署/姓名/職位/日期要有底線 */
+    .sig-line .ul, .staff-line .ul { border-bottom: 1px solid #000 !important; }
+    .sig-line .ul-input, .staff-line .ul-input {
+        border: none !important;
+        border-bottom: 1px solid #000 !important;
+        background: transparent !important;
+    }
+    .ul.wide, .ul.mid { border-bottom: 1px solid #000; }
     input, select, textarea { margin: 0 !important; }
     .opt { margin-right: 3px; }
     .opt .box { width: 7px; height: 7px; }
@@ -303,8 +378,8 @@ sup { font-size: 6.5pt; }
     .pdpa-body .sec { margin-top: 18px; }
 
     /* ===== 第1頁放寬：唔好下便空咁多（只影響第一頁） ===== */
-    .page-first .title1 { font-size: 13pt; line-height: 1.25; }
-    .page-first .title2 { font-size: 15pt; margin: 0 0 3px; line-height: 1.2; }
+    .page-first .title1 { font-size: 14pt; line-height: 1.25; }
+    .page-first .title2 { font-size: 16pt; margin: 0 0 3px; line-height: 1.2; }
     .page-first td, .page-first th { font-size: 10pt; padding: 3px 5px; line-height: 1.5; }
     .page-first .checkrow { line-height: 1.5; }
     .page-first .checkrow + .checkrow { margin-top: 2px; }
@@ -327,7 +402,7 @@ sup { font-size: 6.5pt; }
 <body>
 <div id="loginOverlay">
   <div class="login-box">
-    <h3>🔐 離島社署個案綜合系統</h3>
+    <h3>🔐 離島社區個案綜合系統</h3>
     <div class="login-sub">請輸入兩組存取密碼（各 8 位數字）</div>
     <label>第一組存取密碼</label>
     <input type="password" id="loginPw1" maxlength="8" inputmode="numeric" autocomplete="off">
@@ -545,6 +620,7 @@ sup { font-size: 6.5pt; }
         <span style="width:1px;height:24px;background:#ccc;"></span>
         <input type="date" id="batchDate" class="w-md" title="揀日期">
         <button class="btn-blue btn-small" id="btnBatchDate">📅 加到勾選</button>
+        <button class="btn-blue btn-small" id="btnExportSel">📥 匯出勾選 Excel</button>
     </div>
     <div id="oldImportListBox"></div>
 </div>
@@ -628,7 +704,7 @@ sup { font-size: 6.5pt; }
         </div>
         <div class="checkrow">
           <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="普通家庭">普通家庭</span>
-          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="其他">其他(請註明:<span class="ul wide"></span>)</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="fam" data-ck="其他">其他(請註明：<span class="ul wide"></span>)</span>
         </div>
       </td>
     </tr>
@@ -636,15 +712,15 @@ sup { font-size: 6.5pt; }
       <td colspan="4">
         <div style="font-weight:bold;">本人/本住戶有特殊支援設備的需要 (可選擇多於一項)︰</div>
         <div class="checkrow">
-          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="維持生命的電動醫療設備">維持生命的電動醫療設備(請註明:<span class="ul mid"></span>)</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="維持生命的電動醫療設備">維持生命的電動醫療設備(請註明：<span class="ul mid"></span>)</span>
           <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="緊急召援系統(例如：平安鐘)">緊急召援系統(例如：平安鐘)</span>
         </div>
         <div class="checkrow">
           <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="嚴重聽障人士的家居支援設備">嚴重聽障人士的家居支援設備</span>
-          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="需活動輔助器具">需活動輔助器具(請註明:<span class="ul mid"></span>)</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="需活動輔助器具">需活動輔助器具(請註明：<span class="ul mid"></span>)</span>
         </div>
         <div class="checkrow">
-          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="其他">其他(請註明:<span class="ul wide"></span>)</span>
+          <span class="opt"><input type="checkbox" class="ck" data-g="dev" data-ck="其他">其他(請註明：<span class="ul wide"></span>)</span>
         </div>
       </td>
     </tr>
@@ -714,12 +790,12 @@ sup { font-size: 6.5pt; }
       <td><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="改善*環境衞生/消防隱患/治安情況">改善*環境衞生/消防隱患/治安情況</span></td>
     </tr>
     <tr>
-      <td colspan="3"><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="其他">其他(請註明)︰</span><span class="ul wide"></span></td>
+      <td colspan="3"><span class="opt"><input type="checkbox" class="ck" data-g="srv" data-ck="其他">其他(請註明)：</span><span class="ul wide"></span></td>
     </tr>
     <tr>
       <td colspan="3" style="padding:0;">
         <div style="padding:2px 6px;">服務要求詳情︰</div>
-        <div class="bigbox" style="border:none; border-top:1px solid #000; min-height:105mm;"></div>
+        <textarea class="bigbox bigbox-area" data-f="serviceNeed" style="min-height:105mm;"></textarea>
       </td>
     </tr>
   </table>
@@ -756,8 +832,8 @@ sup { font-size: 6.5pt; }
       <td style="height:66mm;">
         <div class="decl-body"><span class="opt"><input type="checkbox" class="ck">服務要求者同意民政總署同「關愛隊」可以使用喺呢個表格上面提供嘅聯絡方式向佢發放(唔理係任何形式)有關政府服務或者地區事宜嘅資訊。</span></div>
         <div class="sig-line">簽署︰<span class="ul" style="min-width:150px;"></span></div>
-        <div class="sig-line">姓名︰<span class="ul" style="min-width:150px;"></span></div>
-        <div class="sig-line">日期︰<span class="ul" style="min-width:150px;"></span></div>
+        <div class="sig-line">姓名︰<input type="text" class="fillin-plain ul-input" style="width:150px;"></div>
+        <div class="sig-line">日期︰<input type="text" class="fillin-plain ul-input" data-f="date" style="width:150px;"></div>
       </td>
     </tr>
   </table>
@@ -766,15 +842,15 @@ sup { font-size: 6.5pt; }
 
 <!-- ========== 第3頁 ========== -->
 <div class="page break-before page-third">
-  <div style="font-weight:bold; font-size:11pt; margin-bottom:8px;">第四部分︰跟進工作 (由「關愛隊」人員填寫)</div>
-  <p style="margin-bottom:12px;">要求嘅服務需要轉介俾相關政府部門或者團體/機構跟進。</p>
+  <div style="font-weight:bold; font-size:11pt; margin:0 0 8px;">第四部分：跟進工作(由「關愛隊」人員填寫)</div>
+  <p style="margin:0 0 8px;">要求的服務須轉介予相關政府部門或團體/機構跟進。</p>
   <table>
     <colgroup>
       <col style="width:100%;">
     </colgroup>
     <tr>
-      <td style="padding:0;">
-        <div style="padding:2px 6px; font-weight:bold;">跟進工作詳情︰</div>
+      <td>
+        <div style="padding:2px 6px; font-weight:bold;">跟進工作詳情：</div>
         <div style="padding:0 6px 2px;">
           <div style="margin-bottom:7px;">居住人數:<input type="text" class="fillin fillin-sm" data-f="liveNum">個</div>
           <div style="margin-bottom:7px;">工人：<span class="opt"><input type="checkbox" class="ck" data-g="worker" data-ck="有">有</span><span class="opt"><input type="checkbox" class="ck" data-g="worker" data-ck="冇">冇</span>
@@ -782,19 +858,22 @@ sup { font-size: 6.5pt; }
             平安鐘：<span class="opt"><input type="checkbox" class="ck" data-g="bell" data-ck="有">有</span><span class="opt"><input type="checkbox" class="ck" data-g="bell" data-ck="冇">冇</span></div>
           <div><span class="opt"><input type="checkbox" class="ck" data-g="welfare" data-ck="長者生活津貼">長者生活津貼</span><span class="opt"><input type="checkbox" class="ck" data-g="welfare" data-ck="生果金">生果金</span><span class="opt"><input type="checkbox" class="ck" data-g="welfare" data-ck="綜援">綜援</span><span class="opt"><input type="checkbox" class="ck" data-g="welfare" data-ck="其他">其他</span></div>
         </div>
-        <div class="bigbox" style="border:none; border-top:1px solid #000; min-height:165mm;"></div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:0;">
+        <textarea class="bigbox bigbox-area followup-box" style="min-height:55mm;"></textarea>
       </td>
     </tr>
   </table>
-  <div style="font-weight:bold; font-size:12pt; margin:22px 0 0; padding-bottom:12px;">處理個案嘅「關愛隊」人員</div>
+  <div style="font-weight:bold; font-size:12pt; margin:22px 0 0; padding-bottom:12px;">處理個案的「關愛隊」人員</div>
   <div style="font-size:13pt;">
     <div class="staff-line">簽署︰<span class="ul" style="min-width:180px;"></span></div>
-    <div class="staff-line">姓名︰<span class="ul" style="min-width:180px;"></span></div>
-    <div class="staff-line">職位︰<span class="ul" style="min-width:180px;"></span></div>
-    <div class="staff-line">日期︰<span class="ul" style="min-width:180px;"></span></div>
+    <div class="staff-line">姓名︰<input type="text" class="fillin-plain ul-input" style="width:180px;"></div>
+    <div class="staff-line">職位︰<input type="text" class="fillin-plain ul-input" style="width:180px;"></div>
+    <div class="staff-line">日期︰<input type="text" class="fillin-plain ul-input" data-f="date" style="width:180px;"></div>
   </div>
 </div>
-<div class="page-break"></div>
 
 <!-- ========== 第4頁（最後一頁！唔加page‑break，唔會多出空白第5頁） ========== -->
 <div class="page break-before">
@@ -828,6 +907,137 @@ sup { font-size: 6.5pt; }
 <div id="printAllContainer"></div>
 
 <script>
+/* ================= 保安模組（密碼雜湊＋資料加密＋自動鎖定） ================= */
+const LOCK_KEY = "islandCaseLock";
+const IDLE_MS = 5 * 60 * 1000;           // 閒置 5 分鐘自動鎖定
+let _aesKey = null;                       // 登入後先導出嘅加密鎖匙
+let _idleTimer = null;
+
+/* SHA-256 純 JS 實現（Web Crypto 唔可用時嘅後備） */
+function sha256Fallback(ascii){
+    function rightRotate(v, a){ return (v>>>a) | (v<<(32-a)); }
+    var mathPow = Math.pow, maxWord = mathPow(2, 32);
+    var result = '', words = [], asciiBitLength = ascii.length*8;
+    var hash = sha256Fallback.h = sha256Fallback.h || [];
+    var k = sha256Fallback.k = sha256Fallback.k || [];
+    var primeCounter = k.length, isComposite = {};
+    for(var candidate=2; primeCounter<64; candidate++){
+        if(!isComposite[candidate]){
+            for(var i=0; i<313; i+=candidate) isComposite[i]=candidate;
+            hash[primeCounter] = (mathPow(candidate, .5)*maxWord)|0;
+            k[primeCounter++] = (mathPow(candidate, 1/3)*maxWord)|0;
+        }
+    }
+    ascii += '\x80';
+    while(ascii.length%64 - 56) ascii += '\x00';
+    for(var i=0; i<ascii.length; i++){
+        var j = ascii.charCodeAt(i);
+        if(j>>8) return '';
+        words[i>>2] |= j << ((3-i)%4)*8;
+    }
+    words[words.length] = (asciiBitLength/maxWord)|0;
+    words[words.length] = asciiBitLength;
+    for(var j=0; j<words.length;){
+        var w = words.slice(j, j+=16);
+        var oldHash = hash;
+        hash = hash.slice(0,8);
+        for(var i=0; i<64; i++){
+            var w15 = w[i-15], w2 = w[i-2];
+            var a = hash[0], e = hash[4];
+            var temp1 = hash[7]
+                + (rightRotate(e,6) ^ rightRotate(e,11) ^ rightRotate(e,25))
+                + ((e&hash[5]) ^ ((~e)&hash[6]))
+                + k[i]
+                + (w[i] = (i<16) ? w[i] : (
+                    w[i-16]
+                    + (rightRotate(w15,7) ^ rightRotate(w15,18) ^ (w15>>>3))
+                    + w[i-7]
+                    + (rightRotate(w2,17) ^ rightRotate(w2,19) ^ (w2>>>10))
+                )|0);
+            var temp2 = (rightRotate(a,2) ^ rightRotate(a,13) ^ rightRotate(a,22))
+                + ((a&hash[1]) ^ (a&hash[2]) ^ (hash[1]&hash[2]));
+            hash = [(temp1+temp2)|0].concat(hash);
+            hash[4] = (hash[4]+temp1)|0;
+        }
+        for(i=0; i<8; i++) hash[i] = (hash[i]+oldHash[i])|0;
+    }
+    for(i=0; i<8; i++){
+        for(j=3; j+1; j--){
+            var b = (hash[i]>>(j*8))&255;
+            result += ((b<16)?'0':'') + b.toString(16);
+        }
+    }
+    return result;
+}
+async function sha256Hex(str){
+    try{
+        if(window.crypto && crypto.subtle){
+            const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+            return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join("");
+        }
+    }catch(e){}
+    return sha256Fallback(str);
+}
+
+/* 固定鹽（寫死喺 code，配合密碼導出同一把鎖匙） */
+const SALT_BYTES = [0x1c,0x4a,0x7f,0x02,0xd3,0x99,0x65,0x0b,0x8e,0x21,0xfa,0x35,0x55,0xc8,0x90,0x3d];
+async function deriveKey(passphrase){
+    try{
+        if(!(window.crypto && crypto.subtle)) return null;
+        const km = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]);
+        return crypto.subtle.deriveKey(
+            {name:"PBKDF2", salt: new Uint8Array(SALT_BYTES), iterations: 200000, hash:"SHA-256"},
+            km,
+            {name:"AES-GCM", length:256},
+            false, ["encrypt","decrypt"]
+        );
+    }catch(e){ return null; }
+}
+function b64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function unb64(s){ return Uint8Array.from(atob(s), c=>c.charCodeAt(0)); }
+async function encryptData(obj, key){
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({name:"AES-GCM", iv}, key, new TextEncoder().encode(JSON.stringify(obj)));
+    return {v:2, iv:b64(iv), ct:b64(ct)};
+}
+async function decryptData(blob, key){
+    const pt = await crypto.subtle.decrypt({name:"AES-GCM", iv:unb64(blob.iv)}, key, unb64(blob.ct));
+    return JSON.parse(new TextDecoder().decode(pt));
+}
+
+/* 錯誤鎖定（錯 5 次鎖 10 分鐘） */
+function getLockState(){
+    try{ return JSON.parse(localStorage.getItem(LOCK_KEY) || "null"); }catch(e){ return null; }
+}
+
+/* 閒置自動鎖定 */
+function startIdleTimer(){
+    const reset = function(){
+        clearTimeout(_idleTimer);
+        _idleTimer = setTimeout(lockNow, IDLE_MS);
+    };
+    ["mousemove","mousedown","keydown","touchstart","scroll"].forEach(ev => {
+        document.addEventListener(ev, reset, {passive:true});
+    });
+    reset();
+}
+function lockNow(){
+    clearTimeout(_idleTimer);
+    document.getElementById("mainContentWrap").style.display = "none";
+    const ov = document.getElementById("loginOverlay");
+    ov.style.display = "flex";
+    const p1 = document.getElementById("loginPw1");
+    const p2 = document.getElementById("loginPw2");
+    p1.value = ""; p2.value = "";
+    p1.type = "password"; p2.type = "password";
+    const sh = document.getElementById("loginShowPw");
+    if(sh) sh.checked = false;
+    document.getElementById("loginErr").textContent = "🔒 已自動鎖定，請重新登入";
+    _aesKey = null;
+    dataList = []; oldImportList = [];
+    editingId = null;
+}
+
 const STORAGE_KEY = "islandCaseData";
 const STORAGE_OLD_IMPORT = "oldImportList";
 let dataList = [];
@@ -925,20 +1135,40 @@ function showIdValue(v){
     el.type = "text";
     el.value = v;
 }
-function saveAllLocal(){
+async function saveAllLocal(){
     try{
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(dataList));
-        localStorage.setItem(STORAGE_OLD_IMPORT, JSON.stringify(oldImportList));
+        if(_aesKey && window.crypto && crypto.subtle){
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(await encryptData(dataList, _aesKey)));
+            localStorage.setItem(STORAGE_OLD_IMPORT, JSON.stringify(await encryptData(oldImportList, _aesKey)));
+        } else {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(dataList));
+            localStorage.setItem(STORAGE_OLD_IMPORT, JSON.stringify(oldImportList));
+        }
     }catch(e){
-        alert("⚠️ 本地儲存空間已經滿，請先備份同清空部分舊紀錄。");
+        alert("⚠️ 儲存失敗（可能係空間不足），請先備份。");
     }
 }
-function loadLocal(){
+async function loadLocal(){
     try{
+        let wasPlain = false;
         const d = localStorage.getItem(STORAGE_KEY);
-        if(d) dataList = JSON.parse(d) || [];
+        if(d){
+            const p = JSON.parse(d);
+            if(p && p.v === 2 && _aesKey){
+                dataList = await decryptData(p, _aesKey);
+            } else if(Array.isArray(p)){
+                dataList = p; wasPlain = true;
+            }
+        }
         const o = localStorage.getItem(STORAGE_OLD_IMPORT);
-        if(o) oldImportList = JSON.parse(o) || [];
+        if(o){
+            const p = JSON.parse(o);
+            if(p && p.v === 2 && _aesKey){
+                oldImportList = await decryptData(p, _aesKey);
+            } else if(Array.isArray(p)){
+                oldImportList = p; wasPlain = true;
+            }
+        }
         if(oldImportList.length===0 && dataList.length>0) oldImportList = dataList.slice();
         const dateLike = s => /^(\d{4})[-./]\d{1,2}[-./]\d{1,2}/.test(String(s||""));
         [dataList, oldImportList].forEach(arr => arr.forEach(r => {
@@ -947,6 +1177,10 @@ function loadLocal(){
                 r.birthAge = calcAgeFromBirth(r.birthFull) || "";
             }
         }));
+        /* 舊明文資料 → 登入後即刻加密入庫（過渡） */
+        if(wasPlain && _aesKey && window.crypto && crypto.subtle){
+            await saveAllLocal();
+        }
     }catch(e){ dataList=[]; oldImportList=[]; }
 }
 
@@ -1066,13 +1300,13 @@ function scrollListTo(where){
     if(!box) return;
     box.scrollIntoView({ block: where === "top" ? "start" : "end", behavior: "smooth" });
 }
-function applyDateToSelected(){
+async function applyDateToSelected(){
     const d = document.getElementById("batchDate").value;
     if(!d){ alert("⚠️ 請先揀日期"); return; }
     const sel = getSelectedIndexes();
     if(!sel.length){ alert("⚠️ 請先喺列表勾選個案（一個或者多個都得）"); return; }
     sel.forEach(function(i){ if(dataList[i]) dataList[i].serviceDate = d; });
-    saveAllLocal();
+    await saveAllLocal();
     renderOldList();
     updateSelCount();
     alert("✅ 已將日期 " + d + " 加到 " + sel.length + " 個個案");
@@ -1149,28 +1383,28 @@ function toggleDetail(idx){
     const el = document.getElementById("detail-" + idx);
     if(el) el.classList.toggle("open");
 }
-function deleteCase(idx){
+async function deleteCase(idx){
     const rec = oldImportList[idx];
     if(!rec) return;
     if(!confirm("⚠️ 確定要刪除個案 #" + rec.id + " " + (rec.name || "") + " ？")) return;
     oldImportList.splice(idx, 1);
     const di = dataList.findIndex(r => r.id === rec.id);
     if(di >= 0) dataList.splice(di, 1);
-    saveAllLocal();
+    await saveAllLocal();
     renderOldList();
     refreshCaseSelect();
     refreshNextId();
 }
-function setAllHidden(v){
+async function setAllHidden(v){
     dataList.forEach(r => { r.isHidden = v; });
     oldImportList.forEach(r => { r.isHidden = v; });
-    saveAllLocal();
+    await saveAllLocal();
     renderOldList();
 }
-function clearOldImport(){
+async function clearOldImport(){
     if(!confirm("⚠️ 確定要清空顯示列表？（主資料庫會保留，刷新頁面後會重新載入）")) return;
     oldImportList = [];
-    saveAllLocal();
+    await saveAllLocal();
     renderOldList();
 }
 
@@ -1231,7 +1465,7 @@ function normalizeHeader(h){
 }
 function importExcelFile(file){
     const reader = new FileReader();
-    reader.onload = function(e){
+    reader.onload = async function(e){
         try{
             const wb = XLSX.read(new Uint8Array(e.target.result), {type:"array"});
             const ws = wb.Sheets[wb.SheetNames[0]];
@@ -1253,7 +1487,7 @@ function importExcelFile(file){
                 else { dataList.push(rec); added++; }
             }
             oldImportList = dataList.slice();
-            saveAllLocal();
+            await saveAllLocal();
             renderOldList();
             refreshCaseSelect();
             refreshNextId();
@@ -1266,7 +1500,7 @@ function importExcelFile(file){
 }
 function importJsonFile(file){
     const reader = new FileReader();
-    reader.onload = function(e){
+    reader.onload = async function(e){
         try{
             const data = JSON.parse(e.target.result);
             let arr = Array.isArray(data) ? data : (data.dataList || []);
@@ -1286,7 +1520,7 @@ function importJsonFile(file){
                 added++;
             });
             oldImportList = dataList.slice();
-            saveAllLocal();
+            await saveAllLocal();
             renderOldList();
             refreshCaseSelect();
             refreshNextId();
@@ -1343,7 +1577,7 @@ function loadToEdit(idx){
 }
 
 /* ===================== 儲存 ===================== */
-function saveCase(){
+async function saveCase(){
     const idEl = document.getElementById("inpId");
     let id = idEl.value.trim();
     const name = document.getElementById("inpName").value.trim();
@@ -1360,17 +1594,17 @@ function saveCase(){
         dataList.push(rec);
     }
     oldImportList = dataList.slice();
-    saveAllLocal();
+    await saveAllLocal();
     renderOldList();
     refreshCaseSelect();
     formReset();
     alert("✅ 個案已儲存");
 }
-function clearAllData(){
+async function clearAllData(){
     if(!confirm("⚠️ 確定要清空全部紀錄？此動作無法復原！\n建議先做「⬇ JSON 備份」。")) return;
     dataList = [];
     oldImportList = [];
-    saveAllLocal();
+    await saveAllLocal();
     renderOldList();
     refreshCaseSelect();
     formReset();
@@ -1407,7 +1641,7 @@ function exportAllExcel(){
 function exportBackup(){
     if(dataList.length === 0 && oldImportList.length === 0){ alert("⚠️ 目前冇任何資料可以備份"); return; }
     const payload = {
-        app: "離島社署個案綜合系統",
+        app: "離島社區個案綜合系統",
         exportTime: new Date().toLocaleString("zh-HK"),
         dataList: dataList,
         oldImportList: oldImportList
@@ -1419,6 +1653,30 @@ function exportBackup(){
     document.body.appendChild(a);
     a.click();
     setTimeout(function(){ URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 100);
+}
+function exportSelectedExcel(){
+    const sel = getSelectedIndexes();
+    const recs = sel.map(i => dataList[i]).filter(Boolean);
+    if(!recs.length){ alert("⚠️ 請先喺個案列表勾選個案（一個或者多個都得）"); return; }
+    const headers = ["編號","姓名","性別","出生日期","年齡","聯絡電話","電郵地址","地區","村莊/地址","完整地址","家庭類別","工人","平安鐘","家屬姓名","家屬電話","關係","政府福利","居住人數","備注","香港永久性居民","職業","社署I-425","個案編號","特殊支援設備","要求的服務","服務要求詳情","服務日期"];
+    const rows = recs.map(r => [
+        r.id||"", r.name||"", r.gender||"", r.birthFull||"", r.birthAge||"",
+        r.tel||"", r.email||"", r.district||"", r.village||"", r.addr||"",
+        r.familyType||"", r.worker||"", r.bell||"", r.famName||"", r.famTel||"",
+        r.relation||"", r.welfare||"", r.liveNum||"", r.remark||"", r.hkResident||"",
+        r.job||"", r.i425||"", r.caseNo||"", r.devices||"", r.services||"",
+        r.serviceNeed||"", r.serviceDate||""
+    ]);
+    try{
+        const ws = XLSX.utils.aoa_to_sheet([headers].concat(rows));
+        ws["!cols"] = headers.map(h => ({wch: Math.max(10, h.length * 2 + 6)}));
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "個案紀錄");
+        XLSX.writeFile(wb, "離島個案勾選_" + dateStr() + ".xlsx");
+        alert("✅ 已匯出 " + recs.length + " 個勾選個案做 Excel");
+    }catch(e){
+        alert("⚠️ 匯出 Excel 失敗：" + e.message);
+    }
 }
 
 /* ===================== 合併列印 ===================== */
@@ -1476,10 +1734,12 @@ function fillPrintPage(r, p1, p2, p3){
     if(p2){
         setPrintField(p2, "name", r.name);
         setPrintField(p2, "date", r.serviceDate || "");
+        setPrintField(p2, "serviceNeed", r.serviceNeed);
         splitVals(r.services).forEach(v => setPrintCk(p2, "srv", v, true));
     }
     if(p3){
         setPrintField(p3, "liveNum", r.liveNum);
+        setPrintField(p3, "date", r.serviceDate || "");
         setPrintCk(p3, "worker", "有", r.worker === "有");
         setPrintCk(p3, "worker", "冇", r.worker === "冇");
         setPrintCk(p3, "bell", "有", r.bell === "有");
@@ -1542,8 +1802,11 @@ function clearFilled(){
 }
 
 /* ===================== 初始化 ===================== */
-function mainInit(){
-    loadLocal();
+async function mainInit(){
+    await loadLocal();
+    if(!(window.crypto && crypto.subtle)){
+        alert("⚠️ 此瀏覽器唔支援加密（Web Crypto），資料會以明文儲存，建議改用 Chrome／Edge 開啟。");
+    }
     initBirthSelectors();
 
     // 地址下拉聯動（地區 → 村莊 → 地址自動組合）
@@ -1598,6 +1861,7 @@ function mainInit(){
     document.getElementById("btnClearOldImport").addEventListener("click", clearOldImport);
     document.getElementById("btnSelectAll").addEventListener("click", toggleSelectAll);
     document.getElementById("btnBatchDate").addEventListener("click", applyDateToSelected);
+    document.getElementById("btnExportSel").addEventListener("click", exportSelectedExcel);
     document.getElementById("searchKeyword").addEventListener("input", function(){
         renderOldList();
     });
